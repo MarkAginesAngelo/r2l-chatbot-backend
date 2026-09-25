@@ -14,28 +14,42 @@ const { getScenarioDocumentContent } = require('./scenarioLookup');
 const { translateText } = require('../ai/openaiClient');
 
 /**
- * Button labels (shortLabel) are hardcoded English in categories.js /
- * scenarios.js / quickActions.js — they're what gets shown ON the actual
- * Messenger/WhatsApp button, so once a non-English language is picked they
- * need translating too, or a Sinhala/Tamil user keeps seeing English
- * buttons under an already-translated message (R2L testing feedback,
- * Sept 2026). Only the label text is translated — the leading "N. " index
- * (if any) is kept as-is so numbering stays stable and the typed-number
- * fallback (resolveCategorySelection/resolveScenarioSelection, which match
- * on the token "1"/"2"/etc regardless of language) is unaffected. Skipped
- * entirely for English and for empty option lists.
+ * Both `label` (the full sentence — what the website widget renders,
+ * since it has no character limit) and `shortLabel` (the abbreviated
+ * "1. Police / Arrest" form — what Messenger/WhatsApp buttons render,
+ * capped at 20 chars by Meta) are hardcoded English in categories.js /
+ * scenarios.js / quickActions.js. Once a non-English language is picked,
+ * BOTH need translating, or a Sinhala/Tamil user keeps seeing English
+ * options under an already-translated message — on the website widget
+ * specifically, translating only `shortLabel` and leaving `label` alone
+ * (an earlier version of this function) meant the website kept showing
+ * full English sentences, since that's the field it actually displays.
+ * `shortLabel`'s leading "N. " index (if any) is kept as-is through
+ * translation so numbering stays stable and the typed-number fallback
+ * (resolveCategorySelection/resolveScenarioSelection, which match on the
+ * token "1"/"2"/etc regardless of language) is unaffected; `label` has no
+ * such prefix, so it's translated as a plain sentence. Skipped entirely
+ * for English and for empty option lists.
  */
 async function translateOptionLabels(options, language) {
   if (!options?.length || !language || language === 'en') return options;
   return Promise.all(
     options.map(async (o) => {
-      const source = String(o.shortLabel || o.label || '');
-      const match = source.match(/^(\d+\.\s*)?([\s\S]*)$/);
+      const shortSource = String(o.shortLabel || o.label || '');
+      const match = shortSource.match(/^(\d+\.\s*)?([\s\S]*)$/);
       const prefix = match?.[1] || '';
-      const rest = match?.[2] || '';
-      if (!rest.trim()) return o;
-      const translated = await translateText(rest, language);
-      return { ...o, shortLabel: `${prefix}${translated}` };
+      const shortRest = match?.[2] || '';
+
+      const [translatedShort, translatedLabel] = await Promise.all([
+        shortRest.trim() ? translateText(shortRest, language) : null,
+        o.label?.trim() ? translateText(o.label, language) : null,
+      ]);
+
+      return {
+        ...o,
+        ...(translatedShort !== null && { shortLabel: `${prefix}${translatedShort}` }),
+        ...(translatedLabel !== null && { label: translatedLabel }),
+      };
     })
   );
 }
