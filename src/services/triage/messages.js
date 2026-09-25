@@ -2,22 +2,25 @@ const { translateText } = require('../ai/openaiClient');
 const { CATEGORIES, LANGUAGES } = require('./categories');
 
 // Shown before we know the user's language, so it's trilingual by necessity.
+// The options are also sent as real tappable buttons on every channel
+// (website widget, WhatsApp interactive buttons/list, Messenger quick
+// replies) — this text is intentionally just the question, not a repeated
+// numbered list, since the buttons themselves already carry the choices
+// (Messenger/WhatsApp cap a button's own label at 20 characters, so those
+// buttons show a short form like "English" / "සිංහල" rather than a full
+// sentence — see LANGUAGES.shortLabel in categories.js). Typing "1"/"2"/"3"
+// still works as a fallback for anyone who can't see buttons.
 const GREETING_MESSAGE =
   'Welcome to the Right to Life (R2L) Human Rights First Aid platform. ' +
   'Your safety is our absolute priority, and this chat is anonymous.\n\n' +
-  'Which language would you prefer?\n' +
-  '1. English\n' +
-  '2. සිංහල (Sinhala)\n' +
-  '3. தமிழ் (Tamil)\n\n' +
-  'ඔබ කැමති භාෂාව කුමක්ද? (1, 2, හෝ 3 ලෙස පිළිතුරු දෙන්න)\n' +
-  'நீங்கள் விரும்பும் மொழி எது? (1, 2, அல்லது 3 எனப் பதிலளிக்கவும்)';
+  'Which language would you prefer? Tap a button below.\n' +
+  'ඔබ කැමති භාෂාව කුමක්ද? (බොත්තමක් ඔබන්න)\n' +
+  'நீங்கள் விரும்பும் மொழி எது? (பொத்தானை அழுத்தவும்)';
 
 function buildCategoryMenuEnglish() {
-  const lines = CATEGORIES.map((c) => `${c.id}. ${c.label}`);
   return (
     'Thank you. Your identity and chat history remain completely anonymous. ' +
-    'Please select the option that best describes your situation:\n\n' +
-    lines.join('\n')
+    'Tap a button below for the option that best describes your situation.'
   );
 }
 
@@ -37,18 +40,16 @@ async function buildCategoryAckMessage(category, language) {
   return translateText(english, language);
 }
 
-function buildScenarioMenuEnglish(category, scenarios) {
-  const lines = scenarios.map((s) => `${s.id}. ${s.label}`);
-  lines.push(`${scenarios.length + 1}. Something else — let me describe my situation`);
+function buildScenarioMenuEnglish(category) {
   const goldenRulePart = category.goldenRule ? `${category.goldenRule}\n\n` : '';
   return (
-    `${goldenRulePart}Which of these is closest to your situation? You can also just type ` +
-    `your question directly at any point.\n\n${lines.join('\n')}`
+    `${goldenRulePart}Which of these is closest to your situation? Tap a button below, or just type ` +
+    'your question directly at any point.'
   );
 }
 
 async function buildScenarioMenuMessage(category, scenarios, language) {
-  const english = buildScenarioMenuEnglish(category, scenarios);
+  const english = buildScenarioMenuEnglish(category);
   if (language === 'en') return english;
   return translateText(english, language);
 }

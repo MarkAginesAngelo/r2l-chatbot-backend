@@ -6,8 +6,9 @@ const { getSetting } = require('../../controllers/settingsController');
 const { notifyStaff } = require('../../config/socket');
 const { handleTriageStage } = require('../triage/triageEngine');
 const { CATEGORIES } = require('../triage/categories');
-const { getQdrantFilterForCategory } = require('../triage/categoryFilter');
+const { getQdrantFilterForCategory, getQdrantFilterForScenario } = require('../triage/categoryFilter');
 const { resolveQuickAction } = require('../triage/quickActions');
+const { findScenarioByKey } = require('../triage/scenarios');
 
 const SYSTEM_PROMPT = `You are the official assistant for Right to Life Sri Lanka (R2L), an NGO.
 Answer only using the provided context from R2L's approved knowledge base.
@@ -52,7 +53,27 @@ async function findOrCreateChannelConversation({ channel, externalId, displayNam
     [client.id, channel]
   );
 
-  if (openConvo[0]) return { client, conversation: openConvo[0] };
+  if (openConvo[0]) {
+    // A returning WhatsApp/Messenger user (same phone number/PSID) may have
+    // an entirely different case days later. Without this, they'd silently
+    // resume whatever stage/category/scenario they left off at instead of
+    // being asked from the start again — per R2L's testing feedback.
+    // `session_reset_hours` is a settings-table value (default 24, see
+    // migration 004) so R2L can tune it without a redeploy. Computed in JS
+    // rather than SQL EXTRACT() so this works identically against real
+    // Postgres and the pg-mem instance the test suite runs against.
+    const resetHours = Number(await getSetting('session_reset_hours')) || 24;
+    const updatedAt = new Date(openConvo[0].updated_at).getTime();
+    const hoursSinceUpdate = (Date.now() - updatedAt) / (1000 * 60 * 60);
+
+    if (hoursSinceUpdate >= resetHours) {
+      await db.query(`UPDATE conversations SET status = 'closed', updated_at = now() WHERE id = $1`, [
+        openConvo[0].id,
+      ]);
+    } else {
+      return { client, conversation: openConvo[0] };
+    }
+  }
 
   const { rows: newConvo } = await db.query(
     `INSERT INTO conversations (id, client_id, channel, status, stage) VALUES ($1, $2, $3, 'open', 'greeting') RETURNING *`,
@@ -98,21 +119,42 @@ async function handleIncomingMessage({ channel, externalId, displayName, text })
   const triageResult = await handleTriageStage(conversation, text);
 
   if (triageResult && triageResult.fallThrough) {
+    // scenario is set directly (not COALESCE'd) — the triage engine always
+    // returns an explicit newScenario (a key, or null to clear it) at every
+    // stage transition, since "which scenario is active" is fully
+    // determined by the stage being entered, unlike category/language which
+    // may genuinely be unknown yet.
     await db.query(
-      `UPDATE conversations SET stage = $1, category = COALESCE($2, category), updated_at = now() WHERE id = $3`,
-      [triageResult.newStage, triageResult.newCategory || null, conversation.id]
+      `UPDATE conversations SET stage = $1, category = COALESCE($2, category), scenario = $3, updated_at = now() WHERE id = $4`,
+      [triageResult.newStage, triageResult.newCategory || null, triageResult.newScenario || null, conversation.id]
     );
     conversation.stage = triageResult.newStage;
     conversation.category = triageResult.newCategory || conversation.category;
+    conversation.scenario = triageResult.newScenario || null;
   } else if (triageResult) {
-    const { reply, newStage, newLanguage, newCategory, isEmergency, options } = triageResult;
+    const {
+      reply,
+      newStage,
+      newLanguage,
+      newCategory,
+      newScenario,
+      isEmergency,
+      options,
+      // Category/scenario menus carry the FULL sentence per option
+      // (menuStyle: 'list') rather than a short button label — it's up to
+      // each channel controller to decide how to lay that out (the website
+      // widget just renders every option; Messenger paginates it into a
+      // List Template — see messengerWebhookController.js).
+      menuStyle,
+    } = triageResult;
     const language = newLanguage || conversation.language || 'en';
 
     await db.query(
       `UPDATE conversations SET stage = $1, language = COALESCE($2, language),
-         category = COALESCE($3, category), updated_at = now() WHERE id = $4`,
-      [newStage, newLanguage || null, newCategory || null, conversation.id]
+         category = COALESCE($3, category), scenario = $4, updated_at = now() WHERE id = $5`,
+      [newStage, newLanguage || null, newCategory || null, newScenario || null, conversation.id]
     );
+    conversation.scenario = newScenario || null;
 
     await storeMessage(conversation.id, 'ai', reply, language);
 
@@ -138,7 +180,14 @@ async function handleIncomingMessage({ channel, externalId, displayName, text })
       [uuidv4(), channel, language, conversation.id]
     );
 
-    return { reply, conversationId: conversation.id, needsHuman: Boolean(isEmergency), stage: newStage, options };
+    return {
+      reply,
+      conversationId: conversation.id,
+      needsHuman: Boolean(isEmergency),
+      stage: newStage,
+      options,
+      menuStyle,
+    };
   }
 
   const category = CATEGORIES.find((c) => c.key === conversation.category);
@@ -183,9 +232,31 @@ async function handleIncomingMessage({ channel, externalId, displayName, text })
     ? `${conversationalContext} ${retrievalQuery}`
     : retrievalQuery;
 
-  const filter = category ? await getQdrantFilterForCategory(category, language) : undefined;
-  const chunks = await retrieveRelevantChunks(contextualRetrievalQuery, { limit: topK, filter });
-  const bestScore = chunks[0]?.score ?? 0;
+  // If a specific scenario is active (the user picked one from the menu),
+  // scope retrieval to just that scenario's document first — otherwise a
+  // follow-up question could surface a DIFFERENT scenario's contacts from
+  // the same category (e.g. giving a sextortion victim the wage-theft
+  // hotline just because both live under a broader category). If that
+  // narrow search comes back empty or low-confidence, widen to the whole
+  // category before giving up — the follow-up may genuinely be about
+  // something else, and staying wrongly scoped forever would be worse.
+  const activeScenario = findScenarioByKey(conversation.category, conversation.scenario);
+  const scenarioFilter = activeScenario ? await getQdrantFilterForScenario(activeScenario, language) : undefined;
+  const categoryFilter = category ? await getQdrantFilterForCategory(category, language) : undefined;
+  const filter = scenarioFilter || categoryFilter;
+
+  let chunks = await retrieveRelevantChunks(contextualRetrievalQuery, { limit: topK, filter });
+  let bestScore = chunks[0]?.score ?? 0;
+
+  if (scenarioFilter && categoryFilter && (chunks.length === 0 || bestScore < threshold)) {
+    const widerChunks = await retrieveRelevantChunks(contextualRetrievalQuery, { limit: topK, filter: categoryFilter });
+    const widerBestScore = widerChunks[0]?.score ?? 0;
+    if (widerBestScore > bestScore) {
+      chunks = widerChunks;
+      bestScore = widerBestScore;
+    }
+  }
+
   const needsHuman = chunks.length === 0 || bestScore < threshold;
 
   const reply = needsHuman

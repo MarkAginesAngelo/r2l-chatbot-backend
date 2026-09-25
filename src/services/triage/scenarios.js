@@ -47,6 +47,15 @@ function getScenariosForCategory(categoryKey) {
   return SCENARIOS_BY_CATEGORY[categoryKey] || [];
 }
 
+/** Looks up a scenario's full definition (including titleKeywords, needed to
+ * scope Qdrant retrieval) from the `scenario` key persisted on a
+ * conversation row. Returns null if the category/key combination doesn't
+ * exist (e.g. the scenario list changed after the conversation was created). */
+function findScenarioByKey(categoryKey, scenarioKey) {
+  if (!categoryKey || !scenarioKey) return null;
+  return getScenariosForCategory(categoryKey).find((s) => s.key === scenarioKey) || null;
+}
+
 /**
  * Resolves a raw reply against a category's scenario list, or the trailing
  * "Other" option. Returns:
@@ -75,4 +84,10 @@ function resolveScenarioSelection(categoryKey, rawInput) {
   return null;
 }
 
-module.exports = { SCENARIOS_BY_CATEGORY, OTHER_OPTION_LABEL, getScenariosForCategory, resolveScenarioSelection };
+module.exports = {
+  SCENARIOS_BY_CATEGORY,
+  OTHER_OPTION_LABEL,
+  getScenariosForCategory,
+  resolveScenarioSelection,
+  findScenarioByKey,
+};

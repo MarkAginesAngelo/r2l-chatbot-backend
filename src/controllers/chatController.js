@@ -7,8 +7,9 @@ const { getSetting } = require('./settingsController');
 const { notifyStaff } = require('../config/socket');
 const { handleTriageStage } = require('../services/triage/triageEngine');
 const { CATEGORIES } = require('../services/triage/categories');
-const { getQdrantFilterForCategory } = require('../services/triage/categoryFilter');
+const { getQdrantFilterForCategory, getQdrantFilterForScenario } = require('../services/triage/categoryFilter');
 const { resolveQuickAction } = require('../services/triage/quickActions');
+const { findScenarioByKey } = require('../services/triage/scenarios');
 
 const SYSTEM_PROMPT = `You are the official assistant for Right to Life Sri Lanka (R2L), an NGO.
 Answer only using the provided context from R2L's approved knowledge base.
@@ -66,25 +67,30 @@ async function chat(req, res) {
   const triageResult = await handleTriageStage(convo, message);
 
   if (triageResult && triageResult.fallThrough) {
-    // No canned reply — persist the stage/category change and fall through
-    // to the normal RAG pipeline below using the user's original message
-    // (they typed a real question instead of picking a scenario-menu
-    // option, so don't swallow it with a re-prompt).
+    // No canned reply — persist the stage/category/scenario change and fall
+    // through to the normal RAG pipeline below using the user's original
+    // message (they typed a real question instead of picking a
+    // scenario-menu option, so don't swallow it with a re-prompt). scenario
+    // is set directly (not COALESCE'd) — the triage engine always returns
+    // an explicit newScenario (a key, or null to clear it) at every stage
+    // transition.
     await db.query(
-      `UPDATE conversations SET stage = $1, category = COALESCE($2, category), updated_at = now() WHERE id = $3`,
-      [triageResult.newStage, triageResult.newCategory || null, convo.id]
+      `UPDATE conversations SET stage = $1, category = COALESCE($2, category), scenario = $3, updated_at = now() WHERE id = $4`,
+      [triageResult.newStage, triageResult.newCategory || null, triageResult.newScenario || null, convo.id]
     );
     convo.stage = triageResult.newStage;
     convo.category = triageResult.newCategory || convo.category;
+    convo.scenario = triageResult.newScenario || null;
   } else if (triageResult) {
-    const { reply, newStage, newLanguage, newCategory, isEmergency, options } = triageResult;
+    const { reply, newStage, newLanguage, newCategory, newScenario, isEmergency, options } = triageResult;
     const language = newLanguage || convo.language || 'en';
 
     await db.query(
       `UPDATE conversations SET stage = $1, language = COALESCE($2, language),
-         category = COALESCE($3, category), updated_at = now() WHERE id = $4`,
-      [newStage, newLanguage || null, newCategory || null, convo.id]
+         category = COALESCE($3, category), scenario = $4, updated_at = now() WHERE id = $5`,
+      [newStage, newLanguage || null, newCategory || null, newScenario || null, convo.id]
     );
+    convo.scenario = newScenario || null;
 
     await storeMessage(convo.id, 'ai', reply, language);
     notifyStaff('conversation:message', { conversationId: convo.id, senderType: 'ai', content: reply });
@@ -165,9 +171,26 @@ async function chat(req, res) {
     ? `${conversationalContext} ${retrievalQuery}`
     : retrievalQuery;
 
-  const filter = category ? await getQdrantFilterForCategory(category) : undefined;
-  const chunks = await retrieveRelevantChunks(contextualRetrievalQuery, { limit: topK, filter });
-  const bestScore = chunks[0]?.score ?? 0;
+  // See messageHandler.js for the same logic (WhatsApp/Messenger): scope to
+  // the specific picked scenario first, widen to the whole category if that
+  // comes back empty or low-confidence.
+  const activeScenario = findScenarioByKey(convo.category, convo.scenario);
+  const scenarioFilter = activeScenario ? await getQdrantFilterForScenario(activeScenario, language) : undefined;
+  const categoryFilter = category ? await getQdrantFilterForCategory(category, language) : undefined;
+  const filter = scenarioFilter || categoryFilter;
+
+  let chunks = await retrieveRelevantChunks(contextualRetrievalQuery, { limit: topK, filter });
+  let bestScore = chunks[0]?.score ?? 0;
+
+  if (scenarioFilter && categoryFilter && (chunks.length === 0 || bestScore < threshold)) {
+    const widerChunks = await retrieveRelevantChunks(contextualRetrievalQuery, { limit: topK, filter: categoryFilter });
+    const widerBestScore = widerChunks[0]?.score ?? 0;
+    if (widerBestScore > bestScore) {
+      chunks = widerChunks;
+      bestScore = widerBestScore;
+    }
+  }
+
   const needsHuman = chunks.length === 0 || bestScore < threshold;
 
   const reply = needsHuman

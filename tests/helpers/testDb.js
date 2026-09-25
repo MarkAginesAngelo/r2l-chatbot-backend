@@ -51,6 +51,12 @@ function createTestDb() {
   const handoffPriority = fs.readFileSync(path.join(migrationsDir, '003_handoff_priority.sql'), 'utf-8');
   db.public.none(handoffPriority);
 
+  const scenarioAndSessionReset = fs.readFileSync(
+    path.join(migrationsDir, '004_scenario_and_session_reset.sql'),
+    'utf-8'
+  );
+  db.public.none(scenarioAndSessionReset);
+
   const { Pool } = db.adapters.createPg();
   return new Pool();
 }

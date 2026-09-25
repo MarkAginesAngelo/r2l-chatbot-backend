@@ -4,6 +4,13 @@ const { AppError } = require('../middlewares/errorHandler');
 const DEFAULTS = {
   low_confidence_threshold: 0.72,
   retrieval_top_k: 5,
+  // How long a WhatsApp/Messenger conversation can sit idle before a new
+  // incoming message starts it over from the language/category menu instead
+  // of resuming the old stage — a returning user may have a completely
+  // different case days later. Also seeded into the settings table by
+  // migration 004 so it's editable via PUT /api/settings/session_reset_hours
+  // without a redeploy (R2L asked to start at 24h and tune it from there).
+  session_reset_hours: 24,
 };
 
 async function getSetting(key) {
