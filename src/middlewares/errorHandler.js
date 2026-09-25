@@ -6,13 +6,17 @@ class AppError extends Error {
   }
 }
 
+const logger = require('../config/logger');
+
 // eslint-disable-next-line no-unused-vars
 function errorHandler(err, req, res, next) {
   const statusCode = err.statusCode || 500;
   const isProd = process.env.NODE_ENV === 'production';
 
-  // eslint-disable-next-line no-console
-  console.error(`[error] ${req.method} ${req.originalUrl} ->`, err);
+  logger.error(`${req.method} ${req.originalUrl} -> ${err.message}`, {
+    stack: err.stack,
+    statusCode,
+  });
 
   res.status(statusCode).json({
     error: {

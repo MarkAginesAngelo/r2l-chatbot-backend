@@ -1,0 +1,30 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+!.env.production.example
+
+# Dependencies
+node_modules/
+
+# Runtime uploads
+uploads/
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Test / coverage output
+coverage/
+
+# Temporary files
+*.tmp
+*.temp

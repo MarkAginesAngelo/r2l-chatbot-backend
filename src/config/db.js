@@ -1,13 +1,13 @@
 const { Pool } = require('pg');
 const env = require('./env');
+const logger = require('./logger');
 
 const pool = new Pool({
   connectionString: env.db.connectionString,
 });
 
 pool.on('error', (err) => {
-  // eslint-disable-next-line no-console
-  console.error('[db] Unexpected error on idle client', err);
+  logger.error('[db] Unexpected error on idle client', { error: err.message });
   process.exit(1);
 });
 

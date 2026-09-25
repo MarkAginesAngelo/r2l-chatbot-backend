@@ -1,0 +1,59 @@
+# Production overlay — use alongside the base docker-compose.yml:
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml up -d
+#
+# Differences from the dev compose file:
+# - Caddy added as the only internet-facing service (ports 80/443); everything
+#   else is internal-only to the Docker network, not published to the host.
+# - Postgres, Qdrant, Redis ports are NOT published externally — only
+#   reachable by other containers on the same Docker network. In dev they're
+#   published so you can connect a local DB client; in production that would
+#   expose your database directly to the internet, which is especially risky
+#   given the sensitivity of what this system stores.
+# - No bind-mounted source code — runs the image built by the Dockerfile,
+#   not a live-reloading dev copy.
+# - restart: always instead of unless-stopped, so a VPS reboot brings
+#   everything back without manual intervention.
+
+services:
+  postgres:
+    restart: always
+    ports: [] # not published — internal network only
+
+  qdrant:
+    restart: always
+    ports: [] # not published — internal network only
+
+  redis:
+    restart: always
+    ports: [] # not published — internal network only
+
+  api:
+    restart: always
+    volumes:
+      - ./uploads:/app/uploads
+    ports: [] # not published directly — only Caddy reaches it, via the Docker network
+
+  worker:
+    restart: always
+    volumes:
+      - ./uploads:/app/uploads
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: r2l_caddy
+    restart: always
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+      - caddy_logs:/var/log/caddy
+
+volumes:
+  caddy_data:
+  caddy_config:
+  caddy_logs:

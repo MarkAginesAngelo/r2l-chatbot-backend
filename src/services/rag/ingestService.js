@@ -1,6 +1,7 @@
 const fs = require('fs/promises');
 const { v4: uuidv4 } = require('uuid');
 const pdfParse = require('pdf-parse');
+const mammoth = require('mammoth');
 const db = require('../../config/db');
 const { chunkText } = require('./chunker');
 const { embedBatch } = require('../ai/openaiClient');
@@ -16,9 +17,8 @@ async function extractText(filePath, fileType) {
     return fs.readFile(filePath, 'utf-8');
   }
   if (fileType === 'docx') {
-    // Recommend the `mammoth` package for docx -> text extraction.
-    // Kept as an explicit TODO so it's not silently wrong.
-    throw new Error('DOCX extraction not wired up yet — add the "mammoth" package and implement here.');
+    const { value } = await mammoth.extractRawText({ path: filePath });
+    return value;
   }
   throw new Error(`Unsupported file type: ${fileType}`);
 }

@@ -1,0 +1,24 @@
+# Caddy automatically obtains and renews a Let's Encrypt TLS certificate for
+# this domain — no manual certbot/nginx config needed. Point your domain's
+# DNS A record at the VPS's IP before starting Caddy, or certificate
+# issuance will fail.
+#
+# Replace with your real domain, e.g. chatbot.right2lifelanka.org
+your-domain-here.example.com {
+    reverse_proxy api:4000
+
+    # Basic security headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    encode gzip
+
+    log {
+        output file /var/log/caddy/access.log
+        format json
+    }
+}

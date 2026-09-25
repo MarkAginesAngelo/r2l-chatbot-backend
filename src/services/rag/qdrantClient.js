@@ -16,14 +16,11 @@ async function ensureCollection(vectorSize = 1536) {
   await fetch(`${BASE_URL}/collections/${COLLECTION}`, {
     method: 'PUT',
     headers: headers(),
-    body: JSON.stringify({
-      vectors: { size: vectorSize, distance: 'Cosine' },
-    }),
+    body: JSON.stringify({ vectors: { size: vectorSize, distance: 'Cosine' } }),
   });
 }
 
 async function upsertPoints(points) {
-  // points: [{ id, vector, payload }]
   const res = await fetch(`${BASE_URL}/collections/${COLLECTION}/points?wait=true`, {
     method: 'PUT',
     headers: headers(),
@@ -46,7 +43,22 @@ async function search(vector, { limit = 5, filter = undefined } = {}) {
   });
   if (!res.ok) throw new Error(`Qdrant search failed: ${res.status} ${await res.text()}`);
   const data = await res.json();
-  return data.result; // [{ id, score, payload }]
+  return data.result;
 }
 
-module.exports = { ensureCollection, upsertPoints, search };
+/** Deletes every point whose payload.document_id matches — used when a
+ * document is removed so its vectors don't linger and get retrieved after
+ * the document itself is gone from Postgres. */
+async function deletePointsByDocumentId(documentId) {
+  const res = await fetch(`${BASE_URL}/collections/${COLLECTION}/points/delete?wait=true`, {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify({
+      filter: { must: [{ key: 'document_id', match: { value: documentId } }] },
+    }),
+  });
+  if (!res.ok) throw new Error(`Qdrant delete failed: ${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+module.exports = { ensureCollection, upsertPoints, search, deletePointsByDocumentId };

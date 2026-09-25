@@ -3,6 +3,8 @@ const env = require('../../config/env');
 
 const client = new OpenAI({ apiKey: env.openai.apiKey });
 
+const LANGUAGE_NAMES = { en: 'English', si: 'Sinhala', ta: 'Tamil' };
+
 async function embedText(text) {
   const res = await client.embeddings.create({
     model: env.openai.embeddingModel,
@@ -19,13 +21,16 @@ async function embedBatch(texts) {
   return res.data.map((d) => d.embedding);
 }
 
-async function generateAnswer({ systemPrompt, userMessage, contextChunks, language }) {
-  const contextBlock = contextChunks
-    .map((c, i) => `[${i + 1}] ${c.content}`)
-    .join('\n\n');
+async function generateAnswer({ systemPrompt, userMessage, contextChunks, language, history = [] }) {
+  const contextBlock = contextChunks.map((c, i) => `[${i + 1}] ${c.content}`).join('\n\n');
 
   const messages = [
     { role: 'system', content: systemPrompt },
+    // Recent turns of this conversation (excluding the current message,
+    // which is added below) — so a vague follow-up like "what should I do
+    // now?" is understood in context, not answered as a cold, standalone
+    // question with no idea what "now" refers to.
+    ...history.map((h) => ({ role: h.role, content: h.content })),
     {
       role: 'user',
       content:
@@ -45,17 +50,15 @@ async function generateAnswer({ systemPrompt, userMessage, contextChunks, langua
 }
 
 async function detectLanguage(text) {
-  // Lightweight heuristic first; falls back to LLM classification.
-  if (/[\u0D80-\u0DFF]/.test(text)) return 'si'; // Sinhala block
-  if (/[\u0B80-\u0BFF]/.test(text)) return 'ta'; // Tamil block
+  if (/[\u0D80-\u0DFF]/.test(text)) return 'si';
+  if (/[\u0B80-\u0BFF]/.test(text)) return 'ta';
 
   const completion = await client.chat.completions.create({
     model: env.openai.chatModel,
     messages: [
       {
         role: 'system',
-        content:
-          "Detect the primary language of the user's message. Reply with ONLY one code: en, si, or ta.",
+        content: "Detect the primary language of the user's message. Reply with ONLY one code: en, si, or ta.",
       },
       { role: 'user', content: text },
     ],
@@ -67,4 +70,38 @@ async function detectLanguage(text) {
   return ['en', 'si', 'ta'].includes(code) ? code : 'en';
 }
 
-module.exports = { embedText, embedBatch, generateAnswer, detectLanguage };
+/** Generic translation, used both for query-bridging into the English KB and
+ * for localizing onboarding/triage prompts into the user's chosen language. */
+async function translateText(text, targetLanguageCode) {
+  const targetName = LANGUAGE_NAMES[targetLanguageCode] || 'English';
+
+  const completion = await client.chat.completions.create({
+    model: env.openai.chatModel,
+    messages: [
+      {
+        role: 'system',
+        content:
+          `Translate the following text into ${targetName}. Preserve the full meaning and any ` +
+          'specific terms (legal, medical, official names). Reply with ONLY the translated text, nothing else.',
+      },
+      { role: 'user', content: text },
+    ],
+    temperature: 0,
+  });
+
+  return completion.choices[0].message.content.trim();
+}
+
+async function translateToEnglish(text, sourceLanguage) {
+  if (sourceLanguage === 'en') return text;
+  return translateText(text, 'en');
+}
+
+module.exports = {
+  embedText,
+  embedBatch,
+  generateAnswer,
+  detectLanguage,
+  translateText,
+  translateToEnglish,
+};

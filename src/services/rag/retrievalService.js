@@ -3,6 +3,7 @@ const qdrant = require('./qdrantClient');
 
 async function retrieveRelevantChunks(query, { limit = 5 } = {}) {
   const vector = await embedText(query);
+
   const results = await qdrant.search(vector, { limit });
 
   return results.map((r) => ({

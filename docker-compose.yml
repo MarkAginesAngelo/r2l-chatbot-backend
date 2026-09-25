@@ -29,6 +29,15 @@ services:
     volumes:
       - r2l_qdrant_data:/qdrant/storage
 
+  redis:
+    image: redis:7-alpine
+    container_name: r2l_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - r2l_redis_data:/data
+
   api:
     build: .
     container_name: r2l_api
@@ -39,8 +48,27 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+      redis:
+        condition: service_started
     ports:
       - "4000:4000"
+    volumes:
+      - ./src:/app/src
+      - ./uploads:/app/uploads
+
+  worker:
+    build: .
+    container_name: r2l_worker
+    restart: unless-stopped
+    command: npm run worker
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      redis:
+        condition: service_started
     volumes:
       - ./src:/app/src
       - ./uploads:/app/uploads
@@ -48,3 +76,4 @@ services:
 volumes:
   r2l_pg_data:
   r2l_qdrant_data:
+  r2l_redis_data:
