@@ -1,11 +1,12 @@
 // Curated, human-reviewed answer text that ships with the bot (see
-// src/content/siContent.json, built from R2L's "Digital Triage System —
-// Sinhala" document). When a user's language has curated content for what
+// src/content/siContent.json and taContent.json, built from R2L's "Digital
+// Triage System" Sinhala and Tamil documents). When a user's language has curated content for what
 // they picked, it is used verbatim — no machine translation, no database
 // lookup — so the wording is exactly what R2L approved. Anything not covered
 // here falls back to the uploaded knowledge-base documents as before.
 const CONTENT = {
   si: require('../../content/siContent.json'),
+  ta: require('../../content/taContent.json'),
 };
 
 /** The answer for a scenario as an array of paragraphs, or null if there's no

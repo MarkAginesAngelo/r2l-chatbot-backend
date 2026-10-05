@@ -29,12 +29,24 @@ const GREETING_MESSAGE =
 // translating these (as is still done for Tamil) produced awkward Sinhala,
 // and the option lines themselves come from each item's `i18n.si.label`
 // (see categories.js / scenarios.js) rather than being translated at all.
-const SI_CATEGORY_INTRO =
-  'ස්තූතියි. ඔබගේ අනන්‍යතාවය සහ සංවාද ඉතිහාසය සම්පූර්ණයෙන්ම රහසිගතව පවතී. ' +
-  'පහත අංකයක් ඔබන්න, නැතහොත් සම්පූර්ණ විස්තරය කියවන්න:';
-const SI_SCENARIO_INTRO =
-  'මෙයින් ඔබේ තත්වයට වඩාත් ආසන්න වන්නේ කුමක්ද? පහත අංකයක් ඔබන්න, සම්පූර්ණ විස්තරය කියවන්න, ' +
-  'නැතහොත් ඕනෑම අවස්ථාවක ඔබේ ප්‍රශ්නය සෘජුවම ටයිප් කරන්න.';
+const MENU_INTROS = {
+  si: {
+    category:
+      'ස්තූතියි. ඔබගේ අනන්‍යතාවය සහ සංවාද ඉතිහාසය සම්පූර්ණයෙන්ම රහසිගතව පවතී. ' +
+      'පහත අංකයක් ඔබන්න, නැතහොත් සම්පූර්ණ විස්තරය කියවන්න:',
+    scenario:
+      'මෙයින් ඔබේ තත්වයට වඩාත් ආසන්න වන්නේ කුමක්ද? පහත අංකයක් ඔබන්න, සම්පූර්ණ විස්තරය කියවන්න, ' +
+      'නැතහොත් ඕනෑම අවස්ථාවක ඔබේ ප්‍රශ්නය සෘජුවම ටයිප් කරන්න.',
+  },
+  ta: {
+    category:
+      'நன்றி. உங்கள் அடையாளமும் உரையாடல் வரலாறும் முழுமையாக இரகசியமாகவே இருக்கும். ' +
+      'கீழே உள்ள எண்ணை அழுத்தவும், அல்லது முழு விவரத்தையும் வாசிக்கவும்:',
+    scenario:
+      'இவற்றில் உங்கள் நிலைமைக்கு மிக நெருக்கமானது எது? கீழே உள்ள எண்ணை அழுத்தவும், முழு விவரத்தையும் ' +
+      'வாசிக்கவும், அல்லது எந்த நேரத்திலும் உங்கள் கேள்வியை நேரடியாக தட்டச்சு செய்யவும்.',
+  },
+};
 
 /** The option's wording in `language`: the hand-written i18n label when one
  * exists (Sinhala), otherwise the English label. */
@@ -53,9 +65,9 @@ function buildCategoryMenuEnglish() {
 
 async function buildCategoryMenuMessage(language) {
   if (language === 'en') return buildCategoryMenuEnglish();
-  if (language === 'si') {
-    const lines = CATEGORIES.map((c) => `${c.id}. ${labelIn(c, 'si')}`);
-    return `${SI_CATEGORY_INTRO}\n\n${lines.join('\n')}`;
+  if (MENU_INTROS[language]) {
+    const lines = CATEGORIES.map((c) => `${c.id}. ${labelIn(c, language)}`);
+    return `${MENU_INTROS[language].category}\n\n${lines.join('\n')}`;
   }
   return translateText(buildCategoryMenuEnglish(), language);
 }
@@ -82,14 +94,15 @@ function buildScenarioMenuEnglish(category, scenarios) {
 
 async function buildScenarioMenuMessage(category, scenarios, language) {
   if (language === 'en') return buildScenarioMenuEnglish(category, scenarios);
-  if (language === 'si') {
-    // Golden Rule stays machine-translated (long, per-category prose); the
-    // fixed intro and every option line are hand-written Sinhala.
-    const goldenText = getGoldenRule(category.key, 'si') || (category.goldenRule ? await translateText(category.goldenRule, 'si') : null);
+  if (MENU_INTROS[language]) {
+    // Golden Rule: curated text when we have it, machine translation otherwise.
+    const goldenText =
+      getGoldenRule(category.key, language) ||
+      (category.goldenRule ? await translateText(category.goldenRule, language) : null);
     const golden = goldenText ? `${goldenText}\n\n` : '';
-    const lines = scenarios.map((s) => `${s.id}. ${labelIn(s, 'si')}`);
-    lines.push(`${scenarios.length + 1}. ${OTHER_OPTION_I18N.si.label}`);
-    return `${golden}${SI_SCENARIO_INTRO}\n\n${lines.join('\n')}`;
+    const lines = scenarios.map((s) => `${s.id}. ${labelIn(s, language)}`);
+    lines.push(`${scenarios.length + 1}. ${OTHER_OPTION_I18N[language].label}`);
+    return `${golden}${MENU_INTROS[language].scenario}\n\n${lines.join('\n')}`;
   }
   return translateText(buildScenarioMenuEnglish(category, scenarios), language);
 }

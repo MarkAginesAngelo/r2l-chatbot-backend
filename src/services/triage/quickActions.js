@@ -12,7 +12,7 @@ const QUICK_ACTIONS = {
       id: 'contact_r2l',
       label: 'Need Urgent Help? Contact R2L',
       shortLabel: 'Contact R2L',
-      i18n: { si: { label: 'හදිසි උදව්වක් අවශ්‍යද? R2L අමතන්න', shortLabel: 'R2L අමතන්න' } },
+      i18n: { si: { label: 'හදිසි උදව්වක් අවශ්‍යද? R2L අමතන්න', shortLabel: 'R2L අමතන්න' }, ta: { label: 'அவசர உதவி தேவையா? R2L-ஐ தொடர்புகொள்ளவும்', shortLabel: 'R2L-ஐ அழைக்கவும்' } },
       tokens: ['contact_r2l', 'contact r2l', 'need urgent help', 'urgent help'],
       response:
         'The Right to Life (R2L) Human Rights Centre can connect you to local Human Rights First Aid ' +
@@ -26,7 +26,7 @@ const QUICK_ACTIONS = {
       id: 'legal_aid',
       label: 'Free Legal Aid (LAC)',
       shortLabel: 'Legal Aid (LAC)',
-      i18n: { si: { label: 'නොමිලේ නීති ආධාර (LAC)', shortLabel: 'නීති ආධාර (LAC)' } },
+      i18n: { si: { label: 'නොමිලේ නීති ආධාර (LAC)', shortLabel: 'නීති ආධාර (LAC)' }, ta: { label: 'இலவச சட்ட உதவி (LAC)', shortLabel: 'இலவச சட்ட உதவி' } },
       tokens: ['legal_aid', 'legal aid', 'lac', 'free legal aid'],
       response:
         'The Legal Aid Commission of Sri Lanka (LAC) provides free legal advice and representation for ' +
@@ -40,7 +40,7 @@ const QUICK_ACTIONS = {
       id: 'know_rights',
       label: 'Know Your Rights: The Law on Arrests',
       shortLabel: 'Know Your Rights',
-      i18n: { si: { label: 'ඔබේ අයිතිවාසිකම් දැනගන්න: අත්අඩංගුවට ගැනීම් පිළිබඳ නීතිය', shortLabel: 'ඔබේ අයිතිවාසිකම්' } },
+      i18n: { si: { label: 'ඔබේ අයිතිවාසිකම් දැනගන්න: අත්අඩංගුවට ගැනීම් පිළිබඳ නීතිය', shortLabel: 'ඔබේ අයිතිවාසිකම්' }, ta: { label: 'உங்கள் உரிமைகளை அறிந்துகொள்ளுங்கள்: கைது தொடர்பான சட்டம்', shortLabel: 'உங்கள் உரிமைகள்' } },
       tokens: ['know_rights', 'know your rights', 'law on arrests', 'my rights'],
       response:
         'Here is the legal framework protecting you during an arrest in Sri Lanka:\n\n' +

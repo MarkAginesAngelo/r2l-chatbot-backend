@@ -17,6 +17,16 @@ jest.mock('../src/services/ai/openaiClient', () => require('./helpers/openaiMock
 // instance via the module registry so tests can inspect/override calls.)
 const openaiClient = require('../src/services/ai/openaiClient');
 
+jest.mock('../src/services/triage/localContent', () => {
+  const real = jest.requireActual('../src/services/triage/localContent');
+  return {
+    ...real,
+    getScenarioParts: jest.fn(real.getScenarioParts),
+    getQuickActionResponse: jest.fn(real.getQuickActionResponse),
+  };
+});
+const localContent = require('../src/services/triage/localContent');
+
 const mockDb = require('./helpers/mockDb');
 const app = require('../src/app');
 
@@ -110,6 +120,8 @@ describe('chat pipeline — full triage flow', () => {
     await send({ message: '3', conversationId: convoId }); // Tamil
     await send({ message: '1', conversationId: convoId }); // Police
 
+    // No curated Tamil text for this action -> falls back to machine translation.
+    localContent.getQuickActionResponse.mockReturnValueOnce(null);
     const res = await send({ message: 'legal_aid', conversationId: convoId });
     expect(res.body.reply).toMatch(/^\[ta\]/);
   });
@@ -326,6 +338,7 @@ describe('scenario/category lookups respect conversation language', () => {
     );
 
     openaiClient.translateText.mockClear();
+    localContent.getScenarioParts.mockReturnValueOnce(null); // no curated text -> use DB documents
     const res = await send({ message: '1', conversationId: convoId }); // scenario 1: torture
     expect(res.body.reply).toMatch(/TAMIL VERSION/);
     expect(res.body.reply).not.toMatch(/ENGLISH VERSION/);
@@ -354,6 +367,7 @@ describe('scenario/category lookups respect conversation language', () => {
       [uuidv4(), enDocId, 0, 'ENGLISH ONLY VERSION: seek medical attention.']
     );
 
+    localContent.getScenarioParts.mockReturnValueOnce(null);
     const res = await send({ message: '1', conversationId: convoId });
     // translateText mock tags non-English output with [ta] — so English
     // content falling back through here still gets localized before reply

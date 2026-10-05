@@ -6,6 +6,16 @@ jest.mock('../src/config/socket', () => ({ initSocket: jest.fn(), getIO: jest.fn
 jest.mock('../src/services/ai/openaiClient', () => require('./helpers/openaiMock').createOpenAiMock());
 jest.mock('../src/services/rag/retrievalService', () => ({ retrieveRelevantChunks: jest.fn() }));
 
+jest.mock('../src/services/triage/localContent', () => {
+  const real = jest.requireActual('../src/services/triage/localContent');
+  return {
+    ...real,
+    getScenarioParts: jest.fn(real.getScenarioParts),
+    getQuickActionResponse: jest.fn(real.getQuickActionResponse),
+  };
+});
+const localContent = require('../src/services/triage/localContent');
+
 const openaiClient = require('../src/services/ai/openaiClient');
 const mockDb = require('./helpers/mockDb');
 const app = require('../src/app');
@@ -110,6 +120,7 @@ describe('paragraph-wise answers', () => {
       [docId, 'Police - Torture', '/tmp/x.txt', 'txt', 'processed', 'en']
     );
     await mockDb.query(`INSERT INTO document_chunks (id, document_id, chunk_index, content) VALUES ($1, $2, $3, $4)`, [uuidv4(), docId, 0, 'English guidance.']);
+    localContent.getScenarioParts.mockReturnValueOnce(null);
     const res = await send({ message: '1', conversationId: id });
     expect(openaiClient.translateDocument).toHaveBeenCalledWith('English guidance.', 'ta');
     expect(res.body.reply).toBe('[ta] English guidance.');
@@ -177,6 +188,70 @@ describe('curated Sinhala answers (from the R2L Sinhala document)', () => {
       'police-torture', 'police-medical-negligence', 'police-forced-confession',
       'police-fabricated-charges', 'police-planted-drugs', 'police-bias-refusal', 'other',
     ]);
+  });
+});
+
+describe('curated Tamil answers (from the R2L Tamil document)', () => {
+  async function pickTa(category, scenario) {
+    const start = await send({ message: 'hi' });
+    const id = start.body.conversationId;
+    await send({ message: '3', conversationId: id }); // Tamil
+    await send({ message: category, conversationId: id });
+    return send({ message: scenario, conversationId: id });
+  }
+
+  it('shows the approved Tamil category and scenario labels', async () => {
+    const start = await send({ message: 'hi' });
+    const id = start.body.conversationId;
+    const cats = await send({ message: '3', conversationId: id });
+    expect(cats.body.options[0].label).toBe('பொலிஸாரின் துன்புறுத்தல், தாக்குதல் அல்லது கைது');
+    expect(cats.body.options[5].label).toBe('நீங்கள் உடனடி உடல்ரீதியான ஆபத்தில் இருந்தால்');
+    expect(cats.body.reply).toContain('1. பொலிஸாரின் துன்புறுத்தல்');
+    const scs = await send({ message: '3', conversationId: id }); // Financial
+    expect(scs.body.options[2].label).toBe('தொழிலாளர் சுரண்டல், ஊதிய மோசடி மற்றும் EPF/ETF தொடர்பான பிரச்சினைகள்');
+    expect(scs.body.options[scs.body.options.length - 1].key).toBe('other');
+    expect(scs.body.reply).not.toMatch(/Financial|Wage/);
+  });
+
+  it('returns the approved Tamil text as paragraphs, no header, no translation', async () => {
+    const res = await pickTa('3', '3'); // wage theft / EPF-ETF
+    expect(res.body.replyParts.length).toBeGreaterThanOrEqual(4);
+    expect(res.body.replyParts[0]).toMatch(/^நீங்கள் உழைத்து பெற்ற ஊதியத்திற்கும்/);
+    expect(res.body.replyParts[1]).toMatch(/^உடனடி நடவடிக்கை:/);
+    expect(res.body.replyParts[2]).toMatch(/^இலங்கையில் தொடர்புகொள்ள வேண்டிய அமைப்பு:/);
+    expect(res.body.replyParts[res.body.replyParts.length - 1]).toMatch(/0772255158/);
+    expect(res.body.reply).not.toMatch(/\[பொத்தான்/);
+    expect(openaiClient.translateDocument).not.toHaveBeenCalled();
+  });
+
+  it('has curated Tamil text and labels for every scenario', () => {
+    const { SCENARIOS_BY_CATEGORY } = require('../src/services/triage/scenarios');
+    const { CATEGORIES } = require('../src/services/triage/categories');
+    for (const c of CATEGORIES) expect(c.i18n.ta.label).toBeTruthy();
+    for (const list of Object.values(SCENARIOS_BY_CATEGORY)) {
+      for (const sc of list) {
+        const parts = localContent.getScenarioParts(sc.key, 'ta');
+        expect(parts && parts.length).toBeGreaterThan(1);
+        expect(sc.i18n.ta.label).toBeTruthy();
+      }
+    }
+  });
+
+  it('answers police quick actions and the emergency list in curated Tamil', async () => {
+    const res = await pickTa('1', '1');
+    expect(res.body.options.map((o) => o.id)).toEqual(['contact_r2l', 'legal_aid', 'know_rights']);
+    expect(res.body.options[1].label).toBe('இலவச சட்ட உதவி (LAC)');
+    const qa = await send({ message: 'legal_aid', conversationId: res.body.conversationId });
+    expect(qa.body.reply).toMatch(/070-365 5111/);
+    expect(qa.body.reply).toMatch(/சட்ட உதவி ஆணைக்குழு/);
+
+    const start = await send({ message: 'hi' });
+    const id = start.body.conversationId;
+    await send({ message: '3', conversationId: id });
+    const em = await send({ message: '6', conversationId: id });
+    expect(em.body.needsHuman).toBe(true);
+    expect(em.body.reply).toMatch(/119/);
+    expect(em.body.replyParts.length).toBeGreaterThan(3);
   });
 });
 
