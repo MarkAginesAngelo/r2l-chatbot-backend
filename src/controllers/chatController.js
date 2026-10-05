@@ -8,8 +8,9 @@ const { notifyStaff } = require('../config/socket');
 const { handleTriageStage } = require('../services/triage/triageEngine');
 const { CATEGORIES } = require('../services/triage/categories');
 const { getQdrantFilterForCategory, getQdrantFilterForScenario } = require('../services/triage/categoryFilter');
-const { resolveQuickAction } = require('../services/triage/quickActions');
+const { resolveQuickAction, getQuickActionReply } = require('../services/triage/quickActions');
 const { findScenarioByKey } = require('../services/triage/scenarios');
+const { buildReplyParts } = require('../services/triage/replyFormatter');
 
 const SYSTEM_PROMPT = `You are the official assistant for Right to Life Sri Lanka (R2L), an NGO.
 Answer only using the provided context from R2L's approved knowledge base.
@@ -119,6 +120,7 @@ async function chat(req, res) {
 
     return res.json({
       reply,
+      replyParts: buildReplyParts(reply, newStage),
       conversationId: convo.id,
       language,
       stage: newStage,
@@ -139,15 +141,22 @@ async function chat(req, res) {
   const quickAction = convo.category ? resolveQuickAction(convo.category, message) : null;
   if (quickAction) {
     const language = convo.language || 'en';
-    const localizedReply =
-      language === 'en' ? quickAction.response : await translateText(quickAction.response, language);
+    const qaReply = getQuickActionReply(quickAction, language);
+    const localizedReply = qaReply.translated ? qaReply.text : await translateText(qaReply.text, language);
     await storeMessage(convo.id, 'ai', localizedReply, language);
     await db.query(
       `INSERT INTO analytics_events (id, event_type, channel, language, conversation_id)
        VALUES ($1, 'message_sent', $2, $3, $4)`,
       [uuidv4(), channel, language, convo.id]
     );
-    return res.json({ reply: localizedReply, conversationId: convo.id, language, stage: 'in_chat', needsHuman: false });
+    return res.json({
+      reply: localizedReply,
+      replyParts: buildReplyParts(localizedReply, 'in_chat'),
+      conversationId: convo.id,
+      language,
+      stage: 'in_chat',
+      needsHuman: false,
+    });
   }
 
   const language = await detectLanguage(message);
@@ -230,7 +239,7 @@ async function chat(req, res) {
     [uuidv4(), channel, language, convo.id]
   );
 
-  res.json({ reply, conversationId: convo.id, language, stage: 'in_chat', needsHuman });
+  res.json({ reply, replyParts: buildReplyParts(reply, 'in_chat'), conversationId: convo.id, language, stage: 'in_chat', needsHuman });
 }
 
 module.exports = { chat };

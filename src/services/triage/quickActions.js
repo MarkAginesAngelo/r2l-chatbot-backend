@@ -1,3 +1,5 @@
+const { getQuickActionResponse: getCuratedQuickActionResponse } = require('./localContent');
+
 // Some categories offer a small set of canned "quick action" replies the user
 // can tap right after selecting the category, in addition to just describing
 // their situation in free text. Currently only Police has this in R2L's
@@ -10,6 +12,7 @@ const QUICK_ACTIONS = {
       id: 'contact_r2l',
       label: 'Need Urgent Help? Contact R2L',
       shortLabel: 'Contact R2L',
+      i18n: { si: { label: 'හදිසි උදව්වක් අවශ්‍යද? R2L අමතන්න', shortLabel: 'R2L අමතන්න' } },
       tokens: ['contact_r2l', 'contact r2l', 'need urgent help', 'urgent help'],
       response:
         'The Right to Life (R2L) Human Rights Centre can connect you to local Human Rights First Aid ' +
@@ -23,6 +26,7 @@ const QUICK_ACTIONS = {
       id: 'legal_aid',
       label: 'Free Legal Aid (LAC)',
       shortLabel: 'Legal Aid (LAC)',
+      i18n: { si: { label: 'නොමිලේ නීති ආධාර (LAC)', shortLabel: 'නීති ආධාර (LAC)' } },
       tokens: ['legal_aid', 'legal aid', 'lac', 'free legal aid'],
       response:
         'The Legal Aid Commission of Sri Lanka (LAC) provides free legal advice and representation for ' +
@@ -36,6 +40,7 @@ const QUICK_ACTIONS = {
       id: 'know_rights',
       label: 'Know Your Rights: The Law on Arrests',
       shortLabel: 'Know Your Rights',
+      i18n: { si: { label: 'ඔබේ අයිතිවාසිකම් දැනගන්න: අත්අඩංගුවට ගැනීම් පිළිබඳ නීතිය', shortLabel: 'ඔබේ අයිතිවාසිකම්' } },
       tokens: ['know_rights', 'know your rights', 'law on arrests', 'my rights'],
       response:
         'Here is the legal framework protecting you during an arrest in Sri Lanka:\n\n' +
@@ -63,4 +68,15 @@ function getQuickActionsForCategory(categoryKey) {
   return QUICK_ACTIONS[categoryKey] || [];
 }
 
-module.exports = { QUICK_ACTIONS, resolveQuickAction, getQuickActionsForCategory };
+/** The reply text for a tapped quick action, in the user's language. Uses the
+ * curated text when there is one (Sinhala); otherwise returns the English
+ * text and the caller machine-translates it. Returns { text, translated }
+ * where `translated` is true if `text` is already in `language`. */
+function getQuickActionReply(action, language) {
+  if (language === 'en') return { text: action.response, translated: true };
+  const curated = getCuratedQuickActionResponse(action.id, language);
+  if (curated) return { text: curated, translated: true };
+  return { text: action.response, translated: false };
+}
+
+module.exports = { QUICK_ACTIONS, resolveQuickAction, getQuickActionsForCategory, getQuickActionReply };

@@ -1,18 +1,21 @@
-/**
- * Splits text into overlapping chunks suitable for embedding.
- * Simple sentence-aware sliding window — good enough for R2L-length policy docs.
- */
 function chunkText(text, { maxChars = 1200, overlapChars = 150 } = {}) {
-  const clean = text.replace(/\s+/g, ' ').trim();
+  // Collapse runs of spaces/tabs but KEEP line breaks (single newline stays,
+  // 2+ become one blank line) — paragraph structure is what lets an answer be
+  // sent paragraph by paragraph instead of as one wall of text.
+  const clean = text
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t\f\v]+/g, ' ')
+    .replace(/ ?\n ?/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
   const chunks = [];
   let start = 0;
 
   while (start < clean.length) {
     let end = Math.min(start + maxChars, clean.length);
 
-    // try to end on a sentence boundary
     if (end < clean.length) {
-      const lastPeriod = clean.lastIndexOf('. ', end);
+      const lastPeriod = Math.max(clean.lastIndexOf('. ', end), clean.lastIndexOf('.\n', end));
       if (lastPeriod > start + maxChars * 0.5) {
         end = lastPeriod + 1;
       }

@@ -9,9 +9,11 @@ const {
   buildScenarioNotAvailableMessage,
 } = require('./messages');
 const { getQuickActionsForCategory } = require('./quickActions');
-const { getScenariosForCategory, resolveScenarioSelection, OTHER_OPTION_LABEL } = require('./scenarios');
+const { getScenariosForCategory, resolveScenarioSelection, OTHER_OPTION_LABEL, OTHER_OPTION_I18N } = require('./scenarios');
 const { getScenarioDocumentContent } = require('./scenarioLookup');
-const { translateText } = require('../ai/openaiClient');
+const { translateText, translateDocument } = require('../ai/openaiClient');
+const { stripBoilerplate } = require('./replyFormatter');
+const { getScenarioParts } = require('./localContent');
 
 /**
  * Both `label` (the full sentence — what the website widget renders,
@@ -32,13 +34,26 @@ const { translateText } = require('../ai/openaiClient');
  * for English and for empty option lists.
  */
 async function translateOptionLabels(options, language) {
-  if (!options?.length || !language || language === 'en') return options;
+  if (!options?.length) return options;
+  // `i18n` is internal (hand-written per-language wording) — never sent to clients.
+  if (!language || language === 'en') return options.map(({ i18n, ...o }) => o);
   return Promise.all(
-    options.map(async (o) => {
+    options.map(async ({ i18n, ...o }) => {
       const shortSource = String(o.shortLabel || o.label || '');
       const match = shortSource.match(/^(\d+\.\s*)?([\s\S]*)$/);
       const prefix = match?.[1] || '';
       const shortRest = match?.[2] || '';
+
+      // Hand-written wording (currently Sinhala) wins over machine
+      // translation — it's what R2L reviewed and approved.
+      const fixed = i18n?.[language];
+      if (fixed?.label) {
+        return {
+          ...o,
+          label: fixed.label,
+          shortLabel: fixed.shortLabel || `${prefix}${fixed.label}`,
+        };
+      }
 
       const [translatedShort, translatedLabel] = await Promise.all([
         shortRest.trim() ? translateText(shortRest, language) : null,
@@ -56,23 +71,25 @@ async function translateOptionLabels(options, language) {
 
 // --- Vertical menus (categories & scenarios) ------------------------------
 //
-// R2L asked for the category/scenario options to be vertical buttons, same
-// as the language picker. That picker uses Messenger's Button Template
-// (see sendMessengerButtonTemplate in messengerClient.js) — proven working
-// live. A "List Template" was tried here to also show the FULL sentence
-// per option (Button Template titles are capped at 20 characters by Meta),
-// but Meta's Graph API rejected every single List Template send live with
-// an opaque `(#-1) Unexpected internal error`, unrelated to anything wrong
-// in the request — Meta has been inconsistent about supporting that
-// template. So these menus stay on the short, proven `shortLabel` (e.g.
-// "1. Police / Arrest") rather than the full sentence, tagged
-// `menuStyle: 'list'` so messengerWebhookController.js knows to render
-// them as Button Template pages (2 real options + a "More options" button
-// per page, to stay inside Meta's hard 3-button cap) instead of the
-// horizontal quick-reply row used for menus like this on other channels.
-// This function stays channel-agnostic — the website widget has no such
-// limit and just renders every option as its own button — it's entirely
-// up to the channel controller whether/how to paginate.
+// R2L wants the full sentence for each category/scenario option VISIBLE,
+// plus a vertical button to pick it, on Messenger. Meta caps any real
+// button's own text at 20 characters, and the one template that allows
+// more (List Template, up to 80 chars) failed live with an opaque Meta-
+// side error and was abandoned (see messengerClient.js) — so the full
+// sentence can't live ON a button. Instead: the full numbered sentence
+// list lives in the plain message TEXT (see buildCategoryMenuMessage /
+// buildScenarioMenuMessage in messages.js — no character limit there),
+// and the buttons are just the numbers ("1", "2", "3"...), read from each
+// item's `number` field by messengerWebhookController.js. Tapping "2"
+// lines up with "2." in the text above it.
+//
+// `menuStyle: 'list'` tells messengerWebhookController.js this menu may
+// have more than 3 options and needs paginating (2 numbers + a "More
+// options" button per page, to stay inside Meta's hard 3-button cap). This
+// function stays channel-agnostic — the website widget has no such limit
+// and just renders every option (using the full, translated `label`) as
+// its own button — it's entirely up to the channel controller whether/how
+// to lay these out or paginate.
 //
 // A `list_page_<N>` tap (the "More options" button) isn't a real
 // selection, so it's recognized below and just re-shows this same menu
@@ -130,7 +147,7 @@ async function handleTriageStage(conversation, rawMessage) {
       };
     }
     const menu = await buildCategoryMenuMessage(lang);
-    const categoryItems = CATEGORIES.map((c) => ({ id: c.key, key: c.key, label: c.label, shortLabel: c.shortLabel }));
+    const categoryItems = CATEGORIES.map((c) => ({ id: c.key, key: c.key, label: c.label, shortLabel: c.shortLabel, number: c.id, i18n: c.i18n }));
     return {
       reply: menu,
       newStage: 'awaiting_category',
@@ -142,7 +159,7 @@ async function handleTriageStage(conversation, rawMessage) {
 
   if (stage === 'awaiting_category') {
     const language = conversation.language || 'en';
-    const categoryItems = CATEGORIES.map((c) => ({ id: c.key, key: c.key, label: c.label, shortLabel: c.shortLabel }));
+    const categoryItems = CATEGORIES.map((c) => ({ id: c.key, key: c.key, label: c.label, shortLabel: c.shortLabel, number: c.id, i18n: c.i18n }));
 
     // A "More options" tap on a paginated Messenger List Template — not a
     // real selection, just re-show this same menu (see isListPageToken).
@@ -193,7 +210,7 @@ async function handleTriageStage(conversation, rawMessage) {
         newScenario: null,
         options: quickActions.length
           ? await translateOptionLabels(
-              quickActions.map((a) => ({ id: a.id, key: a.id, label: a.label, shortLabel: a.shortLabel })),
+              quickActions.map((a) => ({ id: a.id, key: a.id, label: a.label, shortLabel: a.shortLabel, i18n: a.i18n })),
               language
             )
           : undefined,
@@ -202,8 +219,8 @@ async function handleTriageStage(conversation, rawMessage) {
 
     const menu = await buildScenarioMenuMessage(category, scenarios, language);
     const scenarioItems = [
-      ...scenarios.map((s) => ({ id: s.key, key: s.key, label: s.label, shortLabel: s.shortLabel })),
-      { id: 'other', key: 'other', label: OTHER_OPTION_LABEL, shortLabel: 'Other' },
+      ...scenarios.map((s) => ({ id: s.key, key: s.key, label: s.label, shortLabel: s.shortLabel, number: s.id, i18n: s.i18n })),
+      { id: 'other', key: 'other', label: OTHER_OPTION_LABEL, shortLabel: 'Other', number: String(scenarios.length + 1), i18n: OTHER_OPTION_I18N },
     ];
     return {
       reply: menu,
@@ -226,8 +243,8 @@ async function handleTriageStage(conversation, rawMessage) {
       const scenarios = getScenariosForCategory(categoryKey);
       const menu = category ? await buildScenarioMenuMessage(category, scenarios, language) : '';
       const scenarioItems = [
-        ...scenarios.map((s) => ({ id: s.key, key: s.key, label: s.label, shortLabel: s.shortLabel })),
-        { id: 'other', key: 'other', label: OTHER_OPTION_LABEL, shortLabel: 'Other' },
+        ...scenarios.map((s) => ({ id: s.key, key: s.key, label: s.label, shortLabel: s.shortLabel, number: s.id, i18n: s.i18n })),
+        { id: 'other', key: 'other', label: OTHER_OPTION_LABEL, shortLabel: 'Other', number: String(scenarios.length + 1), i18n: OTHER_OPTION_I18N },
       ];
       return {
         reply: menu,
@@ -257,10 +274,29 @@ async function handleTriageStage(conversation, rawMessage) {
     // A specific scenario was picked — fetch its document directly (no
     // embedding search needed, we already know exactly which document
     // answers this) and hand it back as the grounded answer.
-    const doc = await getScenarioDocumentContent(resolved.scenario, language);
     const category = CATEGORIES.find((c) => c.key === categoryKey);
     const quickActions = category ? getQuickActionsForCategory(category.key) : [];
 
+    // Curated, human-reviewed text for this language wins over everything
+    // else (see localContent.js) — shown exactly as written, paragraph by
+    // paragraph, with no database lookup or machine translation.
+    const curatedParts = getScenarioParts(resolved.scenario.key, language);
+    if (curatedParts) {
+      return {
+        reply: curatedParts.join('\n\n'),
+        newStage: 'in_chat',
+        newCategory: categoryKey,
+        newScenario: resolved.scenario.key,
+        options: quickActions.length
+          ? await translateOptionLabels(
+              quickActions.map((a) => ({ id: a.id, key: a.id, label: a.label, shortLabel: a.shortLabel, i18n: a.i18n })),
+              language
+            )
+          : undefined,
+      };
+    }
+
+    const doc = await getScenarioDocumentContent(resolved.scenario, language);
     if (!doc.found) {
       const reply = await buildScenarioNotAvailableMessage(language);
       // Still remember which scenario was picked even though its document
@@ -279,7 +315,8 @@ async function handleTriageStage(conversation, rawMessage) {
     // padding differences depending on environment.
     const docLang = String(doc.documentLanguage || '').trim().toLowerCase();
     const targetLang = String(language || '').trim().toLowerCase();
-    const reply = docLang === targetLang ? doc.content : await translateText(doc.content, language);
+    const reply =
+      docLang === targetLang ? stripBoilerplate(doc.content) : await translateDocument(doc.content, language);
     return {
       reply,
       newStage: 'in_chat',
@@ -293,7 +330,7 @@ async function handleTriageStage(conversation, rawMessage) {
       // selection — per R2L's requested flow.
       options: quickActions.length
         ? await translateOptionLabels(
-            quickActions.map((a) => ({ id: a.id, key: a.id, label: a.label, shortLabel: a.shortLabel })),
+            quickActions.map((a) => ({ id: a.id, key: a.id, label: a.label, shortLabel: a.shortLabel, i18n: a.i18n })),
             language
           )
         : undefined,

@@ -19,8 +19,8 @@ describe('chunkText', () => {
     expect(chunks.every((c) => c.length > 0)).toBe(true);
   });
 
-  it('collapses excess whitespace', () => {
-    const chunks = chunkText('Hello   \n\n  world');
-    expect(chunks[0]).toBe('Hello world');
+  it('collapses excess spaces but keeps paragraph breaks', () => {
+    const chunks = chunkText('Hello   \n\n\n\n  world   again');
+    expect(chunks[0]).toBe('Hello\n\nworld again');
   });
 });

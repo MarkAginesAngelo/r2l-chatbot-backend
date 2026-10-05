@@ -35,7 +35,16 @@ function extractIncomingText(message) {
  * categories.js/scenarios.js/quickActions.js already accepts the bare form
  * as a valid token, so a single consistent format avoids the class of bug
  * where a prefix matches one option type's tokens but not another's. */
-async function sendStageAwareReply(to, { reply, options }) {
+async function sendStageAwareReply(to, { reply, replyParts, options }) {
+  // Multi-paragraph answers go out as separate messages; only the last one
+  // carries the buttons/list.
+  if (replyParts?.length > 1) {
+    for (const part of replyParts.slice(0, -1)) {
+      await sendWhatsAppMessage(to, part);
+    }
+    return sendStageAwareReply(to, { reply: replyParts[replyParts.length - 1], options });
+  }
+
   if (options?.length) {
     const items = options.map((o) => ({ id: o.code || o.key || o.id, label: o.shortLabel || o.label }));
     if (options.length <= 3) {

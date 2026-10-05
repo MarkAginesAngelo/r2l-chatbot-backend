@@ -71,17 +71,36 @@ function paginateForButtonTemplate(items) {
  * a vertical stack of full-width buttons (Messenger's Button Template),
  * per R2L's request for buttons that don't scroll sideways. `menuStyle:
  * 'list'` (set by triageEngine.js for categories/scenarios) marks a menu
- * that may have MORE than 3 options and so needs paginating — see
- * paginateForButtonTemplate() above. The page shown is picked from
- * `requestedText`: a `list_page_<N>` tap from the previous page's "More
- * options" button (isListPageToken() in triageEngine.js recognizes that
- * same token and re-sends this same menu rather than treating it as a real
- * answer). Everything else (language, quick-actions) is always 3 options
- * or fewer, so it's a single page with no pagination needed.
+ * whose full sentences are in the message TEXT (see messages.js), not on
+ * the buttons — Meta's 20-character button-text cap rules that out — so
+ * these buttons are just the option's `number` ("1", "2", "3"...), lining
+ * up with the numbered list in the text above them. It may also have MORE
+ * than 3 options and so needs paginating — see paginateForButtonTemplate()
+ * above. The page shown is picked from `requestedText`: a `list_page_<N>`
+ * tap from the previous page's "More options" button (isListPageToken()
+ * in triageEngine.js recognizes that same token and re-sends this same
+ * menu rather than treating it as a real answer). Everything else
+ * (language, quick-actions) is always 3 options or fewer and shows its
+ * real (short) label on the button, since there's no separate numbered
+ * text list for those to line up with.
  */
-async function sendStageAwareReply(psid, requestedText, { reply, options, menuStyle }) {
+async function sendStageAwareReply(psid, requestedText, { reply, replyParts, options, menuStyle }) {
+  // An answer made of several paragraphs goes out as several messages, in
+  // order; only the LAST one carries the buttons (if any), so the buttons
+  // sit at the bottom of the conversation.
+  if (replyParts?.length > 1) {
+    for (const part of replyParts.slice(0, -1)) {
+      await sendMessengerMessage(psid, part);
+    }
+    return sendStageAwareReply(psid, requestedText, {
+      reply: replyParts[replyParts.length - 1],
+      options,
+      menuStyle,
+    });
+  }
+
   if (menuStyle === 'list' && options?.length) {
-    const mapped = options.map((o) => ({ id: o.key || o.id, label: o.shortLabel || o.label }));
+    const mapped = options.map((o) => ({ id: o.key || o.id, label: o.number || o.shortLabel || o.label }));
     const pages = paginateForButtonTemplate(mapped);
     const requestedPage = Number(String(requestedText || '').match(LIST_PAGE_REQUEST)?.[1] || 1);
     const pageIndex = Math.min(Math.max(requestedPage - 1, 0), pages.length - 1);
@@ -98,7 +117,10 @@ async function sendStageAwareReply(psid, requestedText, { reply, options, menuSt
       id: o.code ? `lang_${o.code}` : o.key || o.id,
       label: o.shortLabel || o.label,
     }));
-    if (mapped.length <= 3) {
+    // A Button Template's text is capped at 640 characters; a longer last
+    // paragraph (common in a full answer) goes with quick replies instead,
+    // which allow 2000.
+    if (mapped.length <= 3 && String(reply).length <= 640) {
       return sendMessengerButtonTemplate(psid, reply, mapped);
     }
     return sendMessengerQuickReplies(psid, reply, mapped);

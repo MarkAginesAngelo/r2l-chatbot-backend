@@ -42,6 +42,10 @@ module.exports = {
   openai: {
     apiKey: required('OPENAI_API_KEY'),
     chatModel: required('OPENAI_CHAT_MODEL', 'gpt-4o-mini'),
+    // Used for translating guidance documents into Sinhala/Tamil. Defaults to
+    // the chat model; set OPENAI_TRANSLATION_MODEL=gpt-4o (or better) for
+    // noticeably more accurate Sinhala legal wording.
+    translationModel: process.env.OPENAI_TRANSLATION_MODEL || process.env.OPENAI_CHAT_MODEL || 'gpt-4o-mini',
     embeddingModel: required('OPENAI_EMBEDDING_MODEL', 'text-embedding-3-small'),
   },
 

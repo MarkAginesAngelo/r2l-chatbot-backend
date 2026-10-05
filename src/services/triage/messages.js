@@ -1,5 +1,7 @@
 const { translateText } = require('../ai/openaiClient');
 const { CATEGORIES, LANGUAGES } = require('./categories');
+const { OTHER_OPTION_LABEL, OTHER_OPTION_I18N } = require('./scenarios');
+const { getGoldenRule, getEmergencyMessage } = require('./localContent');
 
 // Shown before we know the user's language, so it's trilingual by necessity.
 // The options are also sent as real tappable buttons on every channel
@@ -17,17 +19,45 @@ const GREETING_MESSAGE =
   'ඔබ කැමති භාෂාව කුමක්ද? (බොත්තමක් ඔබන්න)\n' +
   'நீங்கள் விரும்பும் மொழி எது? (பொத்தானை அழுத்தவும்)';
 
+// The numbered list is spelled out here in full (Messenger/WhatsApp button
+// text is capped at 20 characters by the platform, so a button can only
+// ever show an abbreviation like "2. Cybercrime" — this text is where the
+// full sentence lives). The buttons themselves are then just the numbers
+// (see messengerWebhookController.js), so tapping "2" and reading "2." in
+// this list line up.
+// Hand-written Sinhala wording for the fixed menu sentences. Machine-
+// translating these (as is still done for Tamil) produced awkward Sinhala,
+// and the option lines themselves come from each item's `i18n.si.label`
+// (see categories.js / scenarios.js) rather than being translated at all.
+const SI_CATEGORY_INTRO =
+  'ස්තූතියි. ඔබගේ අනන්‍යතාවය සහ සංවාද ඉතිහාසය සම්පූර්ණයෙන්ම රහසිගතව පවතී. ' +
+  'පහත අංකයක් ඔබන්න, නැතහොත් සම්පූර්ණ විස්තරය කියවන්න:';
+const SI_SCENARIO_INTRO =
+  'මෙයින් ඔබේ තත්වයට වඩාත් ආසන්න වන්නේ කුමක්ද? පහත අංකයක් ඔබන්න, සම්පූර්ණ විස්තරය කියවන්න, ' +
+  'නැතහොත් ඕනෑම අවස්ථාවක ඔබේ ප්‍රශ්නය සෘජුවම ටයිප් කරන්න.';
+
+/** The option's wording in `language`: the hand-written i18n label when one
+ * exists (Sinhala), otherwise the English label. */
+function labelIn(item, language) {
+  return item.i18n?.[language]?.label || item.label;
+}
+
 function buildCategoryMenuEnglish() {
+  const lines = CATEGORIES.map((c) => `${c.id}. ${c.label}`);
   return (
     'Thank you. Your identity and chat history remain completely anonymous. ' +
-    'Tap a button below for the option that best describes your situation.'
+    'Tap a number below, or read the full description:\n\n' +
+    lines.join('\n')
   );
 }
 
 async function buildCategoryMenuMessage(language) {
-  const english = buildCategoryMenuEnglish();
-  if (language === 'en') return english;
-  return translateText(english, language);
+  if (language === 'en') return buildCategoryMenuEnglish();
+  if (language === 'si') {
+    const lines = CATEGORIES.map((c) => `${c.id}. ${labelIn(c, 'si')}`);
+    return `${SI_CATEGORY_INTRO}\n\n${lines.join('\n')}`;
+  }
+  return translateText(buildCategoryMenuEnglish(), language);
 }
 
 async function buildCategoryAckMessage(category, language) {
@@ -40,18 +70,28 @@ async function buildCategoryAckMessage(category, language) {
   return translateText(english, language);
 }
 
-function buildScenarioMenuEnglish(category) {
+function buildScenarioMenuEnglish(category, scenarios) {
+  const lines = scenarios.map((s) => `${s.id}. ${s.label}`);
+  lines.push(`${scenarios.length + 1}. ${OTHER_OPTION_LABEL}`);
   const goldenRulePart = category.goldenRule ? `${category.goldenRule}\n\n` : '';
   return (
-    `${goldenRulePart}Which of these is closest to your situation? Tap a button below, or just type ` +
-    'your question directly at any point.'
+    `${goldenRulePart}Which of these is closest to your situation? Tap a number below, read the full ` +
+    `description, or just type your question directly at any point.\n\n${lines.join('\n')}`
   );
 }
 
 async function buildScenarioMenuMessage(category, scenarios, language) {
-  const english = buildScenarioMenuEnglish(category);
-  if (language === 'en') return english;
-  return translateText(english, language);
+  if (language === 'en') return buildScenarioMenuEnglish(category, scenarios);
+  if (language === 'si') {
+    // Golden Rule stays machine-translated (long, per-category prose); the
+    // fixed intro and every option line are hand-written Sinhala.
+    const goldenText = getGoldenRule(category.key, 'si') || (category.goldenRule ? await translateText(category.goldenRule, 'si') : null);
+    const golden = goldenText ? `${goldenText}\n\n` : '';
+    const lines = scenarios.map((s) => `${s.id}. ${labelIn(s, 'si')}`);
+    lines.push(`${scenarios.length + 1}. ${OTHER_OPTION_I18N.si.label}`);
+    return `${golden}${SI_SCENARIO_INTRO}\n\n${lines.join('\n')}`;
+  }
+  return translateText(buildScenarioMenuEnglish(category, scenarios), language);
 }
 
 async function buildDescribeSituationMessage(language) {
@@ -88,6 +128,8 @@ const EMERGENCY_CONTACTS_BLOCK = `
 🤝 R2L General Support: 0772255158`;
 
 async function buildEmergencyMessage(language) {
+  const curated = getEmergencyMessage(language);
+  if (curated) return curated;
   const intro =
     'Please contact the relevant emergency service immediately. Do not wait. ' +
     'If you cannot speak safely, try to move to a secure location first. ' +

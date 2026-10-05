@@ -107,11 +107,11 @@ describe('chat pipeline — full triage flow', () => {
   it('localizes the quick action response for a non-English conversation', async () => {
     const start = await send({ message: 'hi' });
     const convoId = start.body.conversationId;
-    await send({ message: '2', conversationId: convoId }); // Sinhala
+    await send({ message: '3', conversationId: convoId }); // Tamil
     await send({ message: '1', conversationId: convoId }); // Police
 
     const res = await send({ message: 'legal_aid', conversationId: convoId });
-    expect(res.body.reply).toMatch(/^\[si\]/);
+    expect(res.body.reply).toMatch(/^\[ta\]/);
   });
 
   it('answers a real question with a grounded reply once past the scenario menu', async () => {
@@ -299,10 +299,10 @@ describe('scenario sub-menu (police category)', () => {
 });
 
 describe('scenario/category lookups respect conversation language', () => {
-  it('prefers a Sinhala document over an English one when the conversation language is Sinhala', async () => {
+  it('prefers a Tamil document over an English one when the conversation language is Tamil', async () => {
     const start = await send({ message: 'hi' });
     const convoId = start.body.conversationId;
-    await send({ message: '2', conversationId: convoId }); // Sinhala
+    await send({ message: '3', conversationId: convoId }); // Tamil
     await send({ message: '1', conversationId: convoId }); // Police -> awaiting_scenario
 
     const enDocId = uuidv4();
@@ -318,16 +318,16 @@ describe('scenario/category lookups respect conversation language', () => {
     const siDocId = uuidv4();
     await mockDb.query(
       `INSERT INTO documents (id, title, file_path, file_type, status, language) VALUES ($1, $2, $3, $4, $5, $6)`,
-      [siDocId, 'Police - Torture', '/tmp/si.txt', 'txt', 'processed', 'si']
+      [siDocId, 'Police - Torture', '/tmp/si.txt', 'txt', 'processed', 'ta']
     );
     await mockDb.query(
       `INSERT INTO document_chunks (id, document_id, chunk_index, content) VALUES ($1, $2, $3, $4)`,
-      [uuidv4(), siDocId, 0, 'SINHALA VERSION: seek medical attention.']
+      [uuidv4(), siDocId, 0, 'TAMIL VERSION: seek medical attention.']
     );
 
     openaiClient.translateText.mockClear();
     const res = await send({ message: '1', conversationId: convoId }); // scenario 1: torture
-    expect(res.body.reply).toMatch(/SINHALA VERSION/);
+    expect(res.body.reply).toMatch(/TAMIL VERSION/);
     expect(res.body.reply).not.toMatch(/ENGLISH VERSION/);
     // NOTE: this deliberately does NOT assert translateText was skipped.
     // Whether that optimization fires is an internal implementation detail
@@ -338,10 +338,10 @@ describe('scenario/category lookups respect conversation language', () => {
     // optimization triggered on any given environment.
   });
 
-  it('falls back to the English document when no Sinhala version exists yet', async () => {
+  it('falls back to the English document when no Tamil version exists yet', async () => {
     const start = await send({ message: 'hi' });
     const convoId = start.body.conversationId;
-    await send({ message: '2', conversationId: convoId }); // Sinhala
+    await send({ message: '3', conversationId: convoId }); // Tamil
     await send({ message: '1', conversationId: convoId }); // Police
 
     const enDocId = uuidv4();
@@ -355,7 +355,7 @@ describe('scenario/category lookups respect conversation language', () => {
     );
 
     const res = await send({ message: '1', conversationId: convoId });
-    // translateText mock tags non-English output with [si] — so English
+    // translateText mock tags non-English output with [ta] — so English
     // content falling back through here still gets localized before reply
     expect(res.body.reply).toMatch(/ENGLISH ONLY VERSION/);
   });
