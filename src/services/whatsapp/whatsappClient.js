@@ -26,6 +26,7 @@ function clip(text, max) {
 }
 
 async function sendWhatsAppMessage(to, text) {
+  if (!String(text || '').trim()) return null; // never send an empty message
   return callGraphAPI({
     messaging_product: 'whatsapp',
     to,

@@ -11,6 +11,7 @@ const { getQdrantFilterForCategory, getQdrantFilterForScenario } = require('../s
 const { resolveQuickAction, getQuickActionReply } = require('../services/triage/quickActions');
 const { findScenarioByKey } = require('../services/triage/scenarios');
 const { buildReplyParts } = require('../services/triage/replyFormatter');
+const { detectCase, curatedContextChunk } = require('../services/triage/caseClassifier');
 
 const SYSTEM_PROMPT = `You are the official assistant for Right to Life Sri Lanka (R2L), an NGO.
 Answer only using the provided context from R2L's approved knowledge base.
@@ -129,7 +130,7 @@ async function chat(req, res) {
     });
   }
 
-  const category = CATEGORIES.find((c) => c.key === convo.category);
+  let category = CATEGORIES.find((c) => c.key === convo.category);
 
   // Quick-action intercept: some categories (currently Police) offer canned
   // buttons (Contact R2L / Legal Aid / Know Your Rights) alongside free-form
@@ -180,6 +181,27 @@ async function chat(req, res) {
     ? `${conversationalContext} ${retrievalQuery}`
     : retrievalQuery;
 
+  // Re-identify the case from this message and the chat so far. People often
+  // start on one topic and move to another (or raise a second problem) as
+  // the conversation goes on, so the scenario is re-checked on every free-text
+  // message and the answer is grounded in the scenario they are on NOW.
+  const detected = await detectCase({
+    message: message,
+    history: priorTurns,
+    currentCategory: convo.category,
+    currentScenario: convo.scenario,
+  });
+  if (detected?.changed) {
+    await db.query(`UPDATE conversations SET category = $1, scenario = $2, updated_at = now() WHERE id = $3`, [
+      detected.category,
+      detected.scenario,
+      convo.id,
+    ]);
+    convo.category = detected.category;
+    convo.scenario = detected.scenario;
+    category = CATEGORIES.find((c) => c.key === detected.category);
+  }
+
   // See messageHandler.js for the same logic (WhatsApp/Messenger): scope to
   // the specific picked scenario first, widen to the whole category if that
   // comes back empty or low-confidence.
@@ -200,6 +222,14 @@ async function chat(req, res) {
     }
   }
 
+  // Sinhala/Tamil: add the approved curated text for the active scenario so
+  // the answer uses the reviewed wording, not just the English documents.
+  const curated = convo.scenario ? curatedContextChunk(convo.scenario, language) : null;
+  if (curated) {
+    chunks = [curated, ...chunks];
+    bestScore = Math.max(bestScore, curated.score);
+  }
+
   const needsHuman = chunks.length === 0 || bestScore < threshold;
 
   const reply = needsHuman
@@ -216,7 +246,7 @@ async function chat(req, res) {
         history: priorTurns,
       });
 
-  await storeMessage(convo.id, 'ai', reply, language, chunks.map((c) => c.chunkId));
+  await storeMessage(convo.id, 'ai', reply, language, chunks.map((c) => c.chunkId).filter(Boolean));
 
   if (needsHuman) {
     await db.query(`UPDATE conversations SET status = 'needs_human' WHERE id = $1`, [convo.id]);

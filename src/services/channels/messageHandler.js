@@ -10,6 +10,7 @@ const { getQdrantFilterForCategory, getQdrantFilterForScenario } = require('../t
 const { resolveQuickAction, getQuickActionReply } = require('../triage/quickActions');
 const { findScenarioByKey } = require('../triage/scenarios');
 const { buildReplyParts } = require('../triage/replyFormatter');
+const { detectCase, curatedContextChunk } = require('../triage/caseClassifier');
 
 const SYSTEM_PROMPT = `You are the official assistant for Right to Life Sri Lanka (R2L), an NGO.
 Answer only using the provided context from R2L's approved knowledge base.
@@ -193,7 +194,7 @@ async function handleIncomingMessage({ channel, externalId, displayName, text })
     };
   }
 
-  const category = CATEGORIES.find((c) => c.key === conversation.category);
+  let category = CATEGORIES.find((c) => c.key === conversation.category);
 
   // Same reasoning as chatController.js: check quick actions BEFORE language
   // detection. A button/quick-reply tap sends back a short ASCII id (e.g.
@@ -241,6 +242,27 @@ async function handleIncomingMessage({ channel, externalId, displayName, text })
     ? `${conversationalContext} ${retrievalQuery}`
     : retrievalQuery;
 
+  // Re-identify the case from this message and the chat so far. People often
+  // start on one topic and move to another (or raise a second problem) as
+  // the conversation goes on, so the scenario is re-checked on every free-text
+  // message and the answer is grounded in the scenario they are on NOW.
+  const detected = await detectCase({
+    message: text,
+    history: priorTurns,
+    currentCategory: conversation.category,
+    currentScenario: conversation.scenario,
+  });
+  if (detected?.changed) {
+    await db.query(`UPDATE conversations SET category = $1, scenario = $2, updated_at = now() WHERE id = $3`, [
+      detected.category,
+      detected.scenario,
+      conversation.id,
+    ]);
+    conversation.category = detected.category;
+    conversation.scenario = detected.scenario;
+    category = CATEGORIES.find((c) => c.key === detected.category);
+  }
+
   // If a specific scenario is active (the user picked one from the menu),
   // scope retrieval to just that scenario's document first — otherwise a
   // follow-up question could surface a DIFFERENT scenario's contacts from
@@ -266,6 +288,14 @@ async function handleIncomingMessage({ channel, externalId, displayName, text })
     }
   }
 
+  // Sinhala/Tamil: add the approved curated text for the active scenario so
+  // the answer uses the reviewed wording, not just the English documents.
+  const curated = conversation.scenario ? curatedContextChunk(conversation.scenario, language) : null;
+  if (curated) {
+    chunks = [curated, ...chunks];
+    bestScore = Math.max(bestScore, curated.score);
+  }
+
   const needsHuman = chunks.length === 0 || bestScore < threshold;
 
   const reply = needsHuman
@@ -278,7 +308,7 @@ async function handleIncomingMessage({ channel, externalId, displayName, text })
         history: priorTurns,
       });
 
-  await storeMessage(conversation.id, 'ai', reply, language, chunks.map((c) => c.chunkId));
+  await storeMessage(conversation.id, 'ai', reply, language, chunks.map((c) => c.chunkId).filter(Boolean));
 
   if (needsHuman) {
     await db.query(`UPDATE conversations SET status = 'needs_human' WHERE id = $1`, [conversation.id]);

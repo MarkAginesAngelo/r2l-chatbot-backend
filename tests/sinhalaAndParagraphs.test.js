@@ -262,3 +262,19 @@ describe('joinChunks', () => {
     expect(joinChunks([a, b])).toBe('The quick brown fox jumps over the lazy dog. Another sentence follows here. And then the tail end.');
   });
 });
+
+describe('stripBoilerplate on single-line documents (regression: empty reply -> Messenger #100)', () => {
+  const { stripBoilerplate } = require('../src/services/triage/replyFormatter');
+  it('removes only the bracketed header, keeping the answer, when the document is one line', () => {
+    const doc = '(R2L Digital Triage System — Knowledge Base Type: Cyber (Doxing)) User Situation: Someone shared my private details. What to do: report to the CERT. Contacts: 1212.';
+    const out = stripBoilerplate(doc);
+    expect(out).toContain('report to the CERT');
+    expect(out).not.toContain('Knowledge Base Type');
+  });
+  it('never returns an empty string for a non-empty document', () => {
+    expect(stripBoilerplate('R2L Digital Triage System — Knowledge Base Type: Cyber').length).toBeGreaterThan(0);
+  });
+  it('still drops a short header line in a multi-line document', () => {
+    expect(stripBoilerplate('(R2L Digital Triage System — Knowledge Base Type: Police)\n\nAnswer here.')).toBe('Answer here.');
+  });
+});

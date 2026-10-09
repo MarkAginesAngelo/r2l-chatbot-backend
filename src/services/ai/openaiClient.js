@@ -148,7 +148,50 @@ async function translateToEnglish(text, sourceLanguage) {
   return translateText(text, 'en');
 }
 
+/**
+ * Decides which R2L scenario a person's latest message is about, looking at
+ * the recent conversation too. `catalog` is [{ key, label, category }].
+ * Returns { scenario: <key>|null, confidence: 0-1 }, or null on any failure
+ * (the caller then simply keeps the current scenario).
+ */
+async function classifyCase({ message, history = [], catalog, currentScenario }) {
+  try {
+    const list = catalog.map((c) => `${c.key} | ${c.category} | ${c.label}`).join('\n');
+    const recent = history
+      .slice(-4)
+      .map((h) => `${h.role === 'user' ? 'Person' : 'Assistant'}: ${String(h.content).slice(0, 300)}`)
+      .join('\n');
+    const completion = await client.chat.completions.create({
+      model: env.openai.chatModel,
+      temperature: 0,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You route messages sent to a Sri Lankan human-rights NGO helpline. Pick the ONE scenario from the list ' +
+            'that best matches what the person is asking about RIGHT NOW (use earlier turns only for context). ' +
+            'The person may change topic part-way through a chat — follow the new topic. ' +
+            'If they are still on the current scenario, return its key. If the message is a greeting, thanks, or ' +
+            'does not clearly fit any scenario, return null. ' +
+            'Reply with JSON only: {"scenario": "<key or null>", "confidence": <0 to 1>}.\n\n' +
+            `Scenarios (key | category | description):\n${list}`,
+        },
+        {
+          role: 'user',
+          content: `Current scenario: ${currentScenario || 'none'}\n\nRecent chat:\n${recent || '(none)'}\n\nLatest message: ${message}`,
+        },
+      ],
+    });
+    const parsed = JSON.parse(completion.choices[0].message.content);
+    return { scenario: parsed.scenario || null, confidence: Number(parsed.confidence) || 0 };
+  } catch (err) {
+    return null;
+  }
+}
+
 module.exports = {
+  classifyCase,
   embedText,
   embedBatch,
   generateAnswer,

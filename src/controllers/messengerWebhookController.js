@@ -131,24 +131,17 @@ async function sendStageAwareReply(psid, requestedText, { reply, replyParts, opt
   }
 
   if (menuStyle === 'list' && options?.length) {
-    const mapped = options.map((o) => ({ id: o.key || o.id, label: o.number || o.shortLabel || o.label }));
-    const pages = paginateForButtonTemplate(mapped);
-    const requestedPage = Number(String(requestedText || '').match(LIST_PAGE_REQUEST)?.[1] || 1);
-    const pageIndex = Math.min(Math.max(requestedPage - 1, 0), pages.length - 1);
-    const page = pages[pageIndex];
-
-    const buttons = page.hasMore
-      ? [...page.items, { id: `list_page_${pageIndex + 2}`, label: 'More options' }]
-      : page.items;
-    // The menu text (intro + numbered full labels + golden rule) is often
-    // longer than the Button Template's 640-char cap. Send it as plain
-    // message(s) first, then attach the number buttons to a short prompt.
-    let body = reply;
-    if (String(reply).length > BUTTON_TEXT_LIMIT) {
-      for (const chunk of splitForMessenger(reply)) await sendMessengerMessage(psid, chunk);
-      body = PICK_PROMPT[language] || PICK_PROMPT.en;
-    }
-    return sendMessengerButtonTemplate(psid, body, buttons);
+    // Category / scenario menus: ALL options are shown at once (like the
+    // website widget) as quick-reply chips — Messenger allows up to 13 and
+    // a Button Template only 3. The full sentences are in the numbered text
+    // above; each chip is just the option's number, so it lines up with it.
+    const mapped = options.slice(0, 13).map((o) => ({
+      id: o.key || o.id,
+      label: String(o.number || o.shortLabel || o.label),
+    }));
+    const chunks = splitForMessenger(reply);
+    for (const chunk of chunks.slice(0, -1)) await sendMessengerMessage(psid, chunk);
+    return sendMessengerQuickReplies(psid, chunks[chunks.length - 1], mapped);
   }
 
   if (options?.length) {
@@ -169,7 +162,10 @@ async function sendStageAwareReply(psid, requestedText, { reply, replyParts, opt
     }
     return sendMessengerQuickReplies(psid, reply, mapped);
   }
-  return sendMessengerMessage(psid, reply);
+  // No options: still honour Messenger's 2000-char message cap.
+  let last;
+  for (const chunk of splitForMessenger(reply)) last = await sendMessengerMessage(psid, chunk);
+  return last;
 }
 
 async function receiveWebhook(req, res) {

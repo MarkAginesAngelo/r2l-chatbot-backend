@@ -18,6 +18,7 @@ async function callGraphAPI(body) {
 }
 
 async function sendMessengerMessage(psid, text) {
+  if (!String(text || '').trim()) return null; // Meta rejects empty messages (#100)
   return callGraphAPI({ recipient: { id: psid }, message: { text } });
 }
 

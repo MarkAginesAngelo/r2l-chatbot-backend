@@ -9,6 +9,8 @@ function createOpenAiMock() {
     translateText: jest.fn(async (text, targetLang) => (targetLang === 'en' ? text : `[${targetLang}] ${text}`)),
     translateDocument: jest.fn(async (text, targetLang) => (targetLang === 'en' ? text : `[${targetLang}] ${text}`)),
     translateToEnglish: jest.fn(async (text, sourceLang) => (sourceLang === 'en' ? text : `[en] ${text}`)),
+    // By default the classifier has no opinion, so existing tests keep their scenario.
+    classifyCase: jest.fn().mockResolvedValue(null),
     generateAnswer: jest.fn().mockResolvedValue('MOCKED GROUNDED ANSWER'),
   };
 }

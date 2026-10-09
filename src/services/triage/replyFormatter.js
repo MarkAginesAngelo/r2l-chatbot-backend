@@ -19,10 +19,31 @@ const BOILERPLATE_PATTERNS = [
   /^[^\n]*ඩිජිටල් ප්‍රමුඛතා ඇගයීමේ පද්ධතිය[^\n]*$/gm,
 ];
 
+// The header usually sits in brackets: "(R2L Digital Triage System — Knowledge
+// Base Type: Cyber (Doxing))". One nested bracket level is allowed.
+const PAREN_HEADER = /\(\s*(?:R2L Digital Triage|R2L ඩිජිටල්)(?:[^()]|\([^()]*\))*\)/gi;
+// Lines longer than this are real content that merely contains header words —
+// documents stored with the OLD chunker had all whitespace collapsed, so the
+// whole answer was ONE line, and deleting "the header line" deleted everything.
+const MAX_HEADER_LINE = 200;
+
 function stripBoilerplate(text) {
-  let out = String(text || '');
-  for (const pattern of BOILERPLATE_PATTERNS) out = out.replace(pattern, '');
-  return out.replace(/\n{3,}/g, '\n\n').trim();
+  const original = String(text || '');
+  let out = original.replace(PAREN_HEADER, '');
+  out = out
+    .split('\n')
+    .filter((line) => {
+      if (line.length > MAX_HEADER_LINE) return true;
+      return !BOILERPLATE_PATTERNS.some((pattern) => {
+        pattern.lastIndex = 0;
+        return pattern.test(line);
+      });
+    })
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  // Never turn a real answer into nothing — an empty reply can't be sent.
+  return out || original.trim();
 }
 
 // Sentence enders for English, Sinhala/Tamil (full stop) and the Devanagari
