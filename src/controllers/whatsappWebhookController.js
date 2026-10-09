@@ -1,7 +1,12 @@
+const crypto = require('crypto');
 const env = require('../config/env');
 const { handleIncomingMessage } = require('../services/channels/messageHandler');
 const { sendWhatsAppMessage, sendWhatsAppButtons, sendWhatsAppList } = require('../services/whatsapp/whatsappClient');
 const logger = require('../config/logger');
+
+const BODY_LIMIT = 1024; // WhatsApp interactive message body cap
+const LIST_BUTTON = { en: 'Select an option', si: 'විකල්පයක් තෝරන්න', ta: 'தேர்வு செய்க' };
+const PICK_PROMPT = { en: 'Please choose an option 👇', si: 'කරුණාකර විකල්පයක් තෝරන්න 👇', ta: 'ஒரு தேர்வைத் தேர்ந்தெடுக்கவும் 👇' };
 
 function verifyWebhook(req, res) {
   const mode = req.query['hub.mode'];
@@ -12,6 +17,26 @@ function verifyWebhook(req, res) {
     return res.status(200).send(challenge);
   }
   return res.sendStatus(403);
+}
+
+/** Checks Meta's X-Hub-Signature-256 header (HMAC of the raw body with the app
+ * secret). If WHATSAPP_APP_SECRET isn't configured the check is skipped with a
+ * warning so existing setups keep working — set it before going live. */
+let warnedNoSecret = false;
+function isValidSignature(req) {
+  if (!env.whatsapp.appSecret) {
+    if (!warnedNoSecret) {
+      logger.warn('[whatsapp webhook] WHATSAPP_APP_SECRET not set — request signatures are NOT being verified');
+      warnedNoSecret = true;
+    }
+    return true;
+  }
+  const signature = req.headers['x-hub-signature-256'];
+  if (!signature) return false;
+  const expected = `sha256=${crypto.createHmac('sha256', env.whatsapp.appSecret).update(req.rawBody || '').digest('hex')}`;
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 /** Extracts plain text from either a text message or an interactive reply
@@ -28,53 +53,81 @@ function extractIncomingText(message) {
 }
 
 /** Sends the reply as the right WhatsApp message type based on what options
- * are attached — buttons for 3-or-fewer options (language menu, Police's
- * quick actions), a list for more (category menu, scenario sub-menu), plain
- * text otherwise. Sends each option's bare identifier (language code,
- * category/scenario/quick-action key) with no prefix — every resolver in
- * categories.js/scenarios.js/quickActions.js already accepts the bare form
- * as a valid token, so a single consistent format avoids the class of bug
- * where a prefix matches one option type's tokens but not another's. */
-async function sendStageAwareReply(to, { reply, replyParts, options }) {
-  // Multi-paragraph answers go out as separate messages; only the last one
-  // carries the buttons/list.
+ * are attached — buttons for 3-or-fewer options, a list for more, plain text
+ * otherwise. Multi-paragraph answers go out as separate messages; only the
+ * last one carries the buttons/list. A body longer than WhatsApp's 1024-char
+ * interactive limit is sent as plain text first, with a short prompt on the
+ * buttons/list so nothing is cut off. */
+async function sendStageAwareReply(to, { reply, replyParts, options, language }) {
   if (replyParts?.length > 1) {
     for (const part of replyParts.slice(0, -1)) {
       await sendWhatsAppMessage(to, part);
     }
-    return sendStageAwareReply(to, { reply: replyParts[replyParts.length - 1], options });
+    return sendStageAwareReply(to, { reply: replyParts[replyParts.length - 1], options, language });
   }
 
-  if (options?.length) {
-    const items = options.map((o) => ({ id: o.code || o.key || o.id, label: o.shortLabel || o.label }));
-    if (options.length <= 3) {
-      return sendWhatsAppButtons(to, reply, items);
-    }
-    return sendWhatsAppList(to, reply, 'Select an option', items);
+  if (!options?.length) return sendWhatsAppMessage(to, reply);
+
+  const lang = LIST_BUTTON[language] ? language : 'en';
+  let body = reply;
+  if (String(reply).length > BODY_LIMIT) {
+    await sendWhatsAppMessage(to, reply);
+    body = PICK_PROMPT[lang];
   }
-  return sendWhatsAppMessage(to, reply);
+
+  const items = options.map((o) => ({
+    id: o.code || o.key || o.id,
+    number: o.number,
+    label: o.shortLabel || o.label,
+  }));
+  if (options.length <= 3) return sendWhatsAppButtons(to, body, items);
+  return sendWhatsAppList(to, body, LIST_BUTTON[lang], items);
+}
+
+// Meta retries deliveries it thinks failed; remember recent message ids so a
+// retry never produces a duplicate reply.
+const seen = new Map();
+function alreadyHandled(id) {
+  if (!id) return false;
+  const now = Date.now();
+  for (const [k, t] of seen) if (now - t > 10 * 60 * 1000) seen.delete(k);
+  if (seen.has(id)) return true;
+  seen.set(id, now);
+  return false;
+}
+
+async function processMessage(message, change) {
+  const text = extractIncomingText(message);
+  if (!text) return; // statuses, media, reactions etc. are ignored for now
+  if (alreadyHandled(message.id)) return;
+
+  const from = message.from;
+  const displayName = change?.contacts?.find((c) => c.wa_id === from)?.profile?.name || change?.contacts?.[0]?.profile?.name;
+
+  const result = await handleIncomingMessage({ channel: 'whatsapp', externalId: from, displayName, text });
+  await sendStageAwareReply(from, result);
 }
 
 async function receiveWebhook(req, res) {
+  if (!isValidSignature(req)) return res.sendStatus(403);
   res.sendStatus(200); // ack immediately — Meta retries aggressively on slow/non-200 responses
 
   try {
-    const entry = req.body?.entry?.[0];
-    const change = entry?.changes?.[0]?.value;
-    const message = change?.messages?.[0];
-    if (!message) return;
-
-    const text = extractIncomingText(message);
-    if (!text) return; // ignore statuses, media, unsupported message types for now
-
-    const from = message.from;
-    const displayName = change?.contacts?.[0]?.profile?.name;
-
-    const result = await handleIncomingMessage({ channel: 'whatsapp', externalId: from, displayName, text });
-    await sendStageAwareReply(from, result);
+    for (const entry of req.body?.entry || []) {
+      for (const changeItem of entry.changes || []) {
+        const change = changeItem.value;
+        for (const message of change?.messages || []) {
+          try {
+            await processMessage(message, change);
+          } catch (err) {
+            logger.error(`[whatsapp webhook] error handling message: ${err.message}`, { stack: err.stack });
+          }
+        }
+      }
+    }
   } catch (err) {
-    logger.error(`[whatsapp webhook] error handling message: ${err.message}`, { stack: err.stack });
+    logger.error(`[whatsapp webhook] error: ${err.message}`, { stack: err.stack });
   }
 }
 
-module.exports = { verifyWebhook, receiveWebhook };
+module.exports = { verifyWebhook, receiveWebhook, sendStageAwareReply };

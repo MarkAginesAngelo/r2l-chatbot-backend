@@ -187,6 +187,7 @@ async function handleIncomingMessage({ channel, externalId, displayName, text })
       conversationId: conversation.id,
       needsHuman: Boolean(isEmergency),
       stage: newStage,
+      language,
       options,
       menuStyle,
     };

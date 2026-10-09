@@ -84,7 +84,37 @@ function paginateForButtonTemplate(items) {
  * real (short) label on the button, since there's no separate numbered
  * text list for those to line up with.
  */
-async function sendStageAwareReply(psid, requestedText, { reply, replyParts, options, menuStyle }) {
+const PICK_PROMPT = {
+  en: 'Please tap a number below 👇',
+  si: 'කරුණාකර පහත අංකයක් තෝරන්න 👇',
+  ta: 'கீழே ஒரு எண்ணைத் தேர்ந்தெடுக்கவும் 👇',
+};
+const BUTTON_TEXT_LIMIT = 640; // Button Template text cap
+const MESSAGE_LIMIT = 1900; // plain message cap is 2000
+
+/** Splits long text at line/paragraph boundaries into pieces <= max chars. */
+function splitForMessenger(text, max = MESSAGE_LIMIT) {
+  const out = [];
+  let current = '';
+  for (const line of String(text).split('\n')) {
+    if (line.length > max) {
+      if (current) out.push(current);
+      current = '';
+      for (let i = 0; i < line.length; i += max) out.push(line.slice(i, i + max));
+      continue;
+    }
+    if (current && current.length + 1 + line.length > max) {
+      out.push(current);
+      current = line;
+    } else {
+      current = current ? `${current}\n${line}` : line;
+    }
+  }
+  if (current) out.push(current);
+  return out;
+}
+
+async function sendStageAwareReply(psid, requestedText, { reply, replyParts, options, menuStyle, language }) {
   // An answer made of several paragraphs goes out as several messages, in
   // order; only the LAST one carries the buttons (if any), so the buttons
   // sit at the bottom of the conversation.
@@ -96,6 +126,7 @@ async function sendStageAwareReply(psid, requestedText, { reply, replyParts, opt
       reply: replyParts[replyParts.length - 1],
       options,
       menuStyle,
+      language,
     });
   }
 
@@ -109,7 +140,15 @@ async function sendStageAwareReply(psid, requestedText, { reply, replyParts, opt
     const buttons = page.hasMore
       ? [...page.items, { id: `list_page_${pageIndex + 2}`, label: 'More options' }]
       : page.items;
-    return sendMessengerButtonTemplate(psid, reply, buttons);
+    // The menu text (intro + numbered full labels + golden rule) is often
+    // longer than the Button Template's 640-char cap. Send it as plain
+    // message(s) first, then attach the number buttons to a short prompt.
+    let body = reply;
+    if (String(reply).length > BUTTON_TEXT_LIMIT) {
+      for (const chunk of splitForMessenger(reply)) await sendMessengerMessage(psid, chunk);
+      body = PICK_PROMPT[language] || PICK_PROMPT.en;
+    }
+    return sendMessengerButtonTemplate(psid, body, buttons);
   }
 
   if (options?.length) {
@@ -120,8 +159,13 @@ async function sendStageAwareReply(psid, requestedText, { reply, replyParts, opt
     // A Button Template's text is capped at 640 characters; a longer last
     // paragraph (common in a full answer) goes with quick replies instead,
     // which allow 2000.
-    if (mapped.length <= 3 && String(reply).length <= 640) {
+    if (mapped.length <= 3 && String(reply).length <= BUTTON_TEXT_LIMIT) {
       return sendMessengerButtonTemplate(psid, reply, mapped);
+    }
+    if (String(reply).length > MESSAGE_LIMIT) {
+      const chunks = splitForMessenger(reply);
+      for (const chunk of chunks.slice(0, -1)) await sendMessengerMessage(psid, chunk);
+      return sendMessengerQuickReplies(psid, chunks[chunks.length - 1], mapped);
     }
     return sendMessengerQuickReplies(psid, reply, mapped);
   }
@@ -163,4 +207,4 @@ async function receiveWebhook(req, res) {
   }
 }
 
-module.exports = { verifyWebhook, receiveWebhook };
+module.exports = { verifyWebhook, receiveWebhook, sendStageAwareReply };
