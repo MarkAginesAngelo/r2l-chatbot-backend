@@ -1,4 +1,4 @@
-const db = require('../../config/db');
+const { findDocumentsWithFallback } = require('./documentMatch');
 
 /**
  * Shared by getQdrantFilterForCategory and getQdrantFilterForScenario: finds
@@ -10,28 +10,11 @@ const db = require('../../config/db');
  */
 async function buildTitleKeywordFilter(titleKeywords, language = 'en') {
   if (!titleKeywords || titleKeywords.length === 0) return undefined;
-
-  const conditions = titleKeywords.map((_, i) => `replace(replace(title, '_', ' '), '-', ' ') ILIKE $${i + 1}`).join(' OR ');
-  const params = titleKeywords.map((kw) => `%${kw}%`);
-
-  const langParamIndex = params.length + 1;
-  let { rows } = await db.query(
-    `SELECT id FROM documents WHERE (${conditions}) AND status = 'processed' AND language = $${langParamIndex}`,
-    [...params, language]
-  );
-
-  // Fall back to English documents if no localized version exists yet for
-  // this topic — better to ground in the right topic, wrong language (the
-  // reply is still translated at generation time) than find nothing.
-  if (rows.length === 0 && language !== 'en') {
-    ({ rows } = await db.query(
-      `SELECT id FROM documents WHERE (${conditions}) AND status = 'processed' AND language = 'en'`,
-      params
-    ));
-  }
-
+  // Falls back to English documents if no localized version exists yet —
+  // better to ground in the right topic, wrong language (the reply is still
+  // translated at generation time) than find nothing.
+  const rows = await findDocumentsWithFallback(titleKeywords, language);
   if (rows.length === 0) return undefined;
-
   return {
     should: rows.map((r) => ({ key: 'document_id', match: { value: r.id } })),
   };

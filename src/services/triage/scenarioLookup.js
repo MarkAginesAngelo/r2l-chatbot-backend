@@ -1,4 +1,5 @@
 const db = require('../../config/db');
+const { findDocumentsWithFallback } = require('./documentMatch');
 
 /**
  * Fetches a scenario's document content directly (concatenated chunks, in
@@ -47,25 +48,7 @@ async function getScenarioDocumentContent(scenario, language = 'en') {
     return { found: false };
   }
 
-  const conditions = scenario.titleKeywords.map((_, i) => `replace(replace(title, '_', ' '), '-', ' ') ILIKE $${i + 1}`).join(' OR ');
-  const params = scenario.titleKeywords.map((kw) => `%${kw}%`);
-  const langParamIndex = params.length + 1;
-
-  let { rows: docRows } = await db.query(
-    `SELECT id, title, language FROM documents
-     WHERE (${conditions}) AND status = 'processed' AND language = $${langParamIndex}
-     ORDER BY created_at DESC LIMIT 1`,
-    [...params, language]
-  );
-
-  if (docRows.length === 0 && language !== 'en') {
-    ({ rows: docRows } = await db.query(
-      `SELECT id, title, language FROM documents
-       WHERE (${conditions}) AND status = 'processed' AND language = 'en'
-       ORDER BY created_at DESC LIMIT 1`,
-      params
-    ));
-  }
+  const docRows = (await findDocumentsWithFallback(scenario.titleKeywords, language)).slice(0, 1);
 
   if (docRows.length === 0) return { found: false };
 
