@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>R2L Case Analytics</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --ink:#1d2330; --muted:#667085; --line:#e4e7ec; --brand:#1f6f5c; --brand-ink:#fff; --warn:#b54708; --bar:#2c8f78; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12161d; --card:#1b212b; --ink:#e8ecf2; --muted:#98a2b3; --line:#2b3340; --brand:#3fb59a; --brand-ink:#0b1210; --warn:#f79009; --bar:#3fb59a; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width:1100px; margin:0 auto; padding:16px; }
+  h1 { font-size:20px; margin:8px 0 16px; }
+  h2 { font-size:15px; margin:0 0 10px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  .row { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; }
+  label { display:flex; flex-direction:column; font-size:12px; color:var(--muted); gap:4px; min-width:140px; flex:1 1 140px; }
+  select, input { font:inherit; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--ink); }
+  button { font:inherit; padding:9px 14px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--ink); cursor:pointer; }
+  button.primary { background:var(--brand); color:var(--brand-ink); border-color:var(--brand); font-weight:600; }
+  button:disabled { opacity:.5; cursor:default; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
+  .kpi b { display:block; font-size:28px; }
+  .kpi span { color:var(--muted); font-size:13px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; }
+  .bar { display:grid; grid-template-columns:150px 1fr 40px; gap:8px; align-items:center; margin:6px 0; font-size:13px; }
+  .bar i { display:block; height:10px; background:var(--bar); border-radius:5px; min-width:2px; }
+  .bar span:last-child { text-align:right; color:var(--muted); }
+  .trend { display:flex; align-items:flex-end; gap:3px; height:90px; }
+  .trend i { flex:1; background:var(--bar); border-radius:3px 3px 0 0; min-height:2px; }
+  .scroll { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--muted); font-weight:600; }
+  .yes { color:var(--warn); font-weight:600; }
+  .muted { color:var(--muted); }
+  #login { max-width:360px; margin:60px auto; }
+  #login label { margin-bottom:12px; }
+  .err { color:#b42318; margin-top:8px; min-height:1.2em; }
+  .pager { display:flex; gap:8px; align-items:center; justify-content:flex-end; margin-top:10px; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<main>
+  <section id="login" class="card">
+    <h1>R2L Case Analytics</h1>
+    <form id="loginForm">
+      <label>Email <input type="email" id="email" required autocomplete="username"></label>
+      <label>Password <input type="password" id="password" required autocomplete="current-password"></label>
+      <button class="primary" type="submit">Sign in</button>
+      <div class="err" id="loginErr" role="alert"></div>
+    </form>
+  </section>
+
+  <section id="app" class="hidden">
+    <h1>Case analytics</h1>
+
+    <form id="filters" class="card">
+      <div class="row">
+        <label>Time period
+          <select id="period">
+            <option value="30d">Last 30 days</option>
+            <option value="today">Today</option>
+            <option value="7d">Last 7 days</option>
+            <option value="90d">Last 90 days</option>
+            <option value="all">All time</option>
+            <option value="custom">Custom range…</option>
+          </select>
+        </label>
+        <label class="custom hidden">From <input type="date" id="from"></label>
+        <label class="custom hidden">To <input type="date" id="to"></label>
+        <label>Language
+          <select id="language"><option value="all">All</option><option value="en">English</option><option value="si">Sinhala</option><option value="ta">Tamil</option></select>
+        </label>
+        <label>Category
+          <select id="category"><option value="all">All</option>
+            <option value="police">Police</option><option value="cyber">Cyber</option><option value="financial">Financial</option>
+            <option value="land">Land</option><option value="family">Domestic / Family</option><option value="danger">Immediate danger</option></select>
+        </label>
+        <label>Human agent
+          <select id="needsHuman"><option value="all">All</option><option value="yes">Needed</option><option value="no">Not needed</option></select>
+        </label>
+        <label>Channel
+          <select id="channel"><option value="all">All</option><option value="website">Website</option><option value="whatsapp">WhatsApp</option><option value="messenger">Messenger</option></select>
+        </label>
+        <button class="primary" type="submit">Apply</button>
+      </div>
+    </form>
+
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <h2>Download these results</h2>
+        <div class="row">
+          <button id="xlsx">Export Excel</button>
+          <button id="pdf">Export PDF</button>
+        </div>
+      </div>
+      <div class="err" id="err" role="alert"></div>
+    </div>
+
+    <div class="card"><div class="kpis" id="kpis"></div></div>
+
+    <div class="grid">
+      <div class="card"><h2>By language</h2><div id="byLanguage"></div></div>
+      <div class="card"><h2>By channel</h2><div id="byChannel"></div></div>
+      <div class="card"><h2>By category</h2><div id="byCategory"></div></div>
+    </div>
+    <div class="card"><h2>Cases per day</h2><div class="trend" id="trend"></div><div class="muted" id="trendLabel"></div></div>
+
+    <div class="card">
+      <h2>Cases</h2>
+      <div class="scroll"><table>
+        <thead><tr><th>Date (UTC)</th><th>Channel</th><th>Language</th><th>Category</th><th>Scenario</th><th>Human agent</th><th>Status</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table></div>
+      <div class="pager"><button id="prev">Previous</button><span id="pageInfo" class="muted"></span><button id="next">Next</button></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  let token = null, page = 1, lastTotal = 0;
+  const PAGE_SIZE = 25;
+  const LANG = { en: 'English', si: 'Sinhala', ta: 'Tamil' };
+  const CH = { website: 'Website', whatsapp: 'WhatsApp', messenger: 'Messenger' };
+
+  function query() {
+    const q = new URLSearchParams();
+    const p = $('period').value;
+    if (p === 'custom') { if ($('from').value) q.set('from', $('from').value); if ($('to').value) q.set('to', $('to').value); }
+    else if (p !== 'all') q.set('period', p);
+    for (const k of ['language', 'category', 'needsHuman', 'channel']) if ($(k).value !== 'all') q.set(k, $(k).value);
+    return q;
+  }
+  async function api(path, params) {
+    const res = await fetch(`/api/analytics/${path}?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+    if (res.status === 401) { signOut(); throw new Error('Session expired — please sign in again.'); }
+    if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.error?.message || b.message || `Error ${res.status}`); }
+    return res;
+  }
+  function bars(el, list) {
+    const max = Math.max(1, ...list.map((x) => x.count));
+    el.innerHTML = list.map((x) => `<div class="bar"><span>${esc(x.label)}</span><i style="width:${(x.count / max) * 100}%"></i><span>${x.count}</span></div>`).join('');
+  }
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  async function load() {
+    $('err').textContent = '';
+    const q = query(); q.set('page', page); q.set('pageSize', PAGE_SIZE);
+    try {
+      const data = await (await api('cases', q)).json();
+      const s = data.summary;
+      $('kpis').innerHTML =
+        `<div class="kpi"><b>${s.total}</b><span>Total cases</span></div>` +
+        `<div class="kpi"><b>${s.needsHuman}</b><span>Human agent needed</span></div>` +
+        `<div class="kpi"><b>${s.noHumanNeeded}</b><span>No human needed</span></div>`;
+      bars($('byLanguage'), s.byLanguage); bars($('byChannel'), s.byChannel); bars($('byCategory'), s.byCategory);
+      const max = Math.max(1, ...s.byDay.map((d) => d.count));
+      $('trend').innerHTML = s.byDay.map((d) => `<i title="${d.date}: ${d.count}" style="height:${(d.count / max) * 100}%"></i>`).join('');
+      $('trendLabel').textContent = s.byDay.length ? `${s.byDay[0].date} → ${s.byDay[s.byDay.length - 1].date}` : 'No cases in this period';
+      $('rows').innerHTML = data.cases.rows.map((r) =>
+        `<tr><td>${esc(new Date(r.createdAt).toISOString().replace('T', ' ').slice(0, 16))}</td><td>${esc(CH[r.channel] || r.channel)}</td><td>${esc(LANG[r.language] || r.language)}</td>` +
+        `<td>${esc(r.categoryLabel)}</td><td>${esc(r.scenarioLabel)}</td><td class="${r.needsHuman ? 'yes' : ''}">${r.needsHuman ? 'Needed' : '—'}</td><td>${esc(r.status)}</td></tr>`).join('') ||
+        '<tr><td colspan="7" class="muted">No cases match these filters.</td></tr>';
+      lastTotal = data.cases.total;
+      const pages = Math.max(1, Math.ceil(lastTotal / PAGE_SIZE));
+      $('pageInfo').textContent = `Page ${page} of ${pages} · ${lastTotal} cases`;
+      $('prev').disabled = page <= 1; $('next').disabled = page >= pages;
+    } catch (e) { $('err').textContent = e.message; }
+  }
+
+  async function download(format) {
+    $('err').textContent = '';
+    const q = query(); q.set('format', format);
+    try {
+      const res = await api('export', q);
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `r2l-cases-${new Date().toISOString().slice(0, 10)}.${format}`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    } catch (e) { $('err').textContent = e.message; }
+  }
+
+  function signOut() { token = null; $('app').classList.add('hidden'); $('login').classList.remove('hidden'); }
+
+  $('loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault(); $('loginErr').textContent = '';
+    try {
+      const res = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: $('email').value, password: $('password').value }) });
+      const b = await res.json();
+      if (!res.ok) throw new Error(b.error?.message || 'Sign-in failed');
+      token = b.accessToken; $('password').value = '';
+      $('login').classList.add('hidden'); $('app').classList.remove('hidden');
+      page = 1; load();
+    } catch (err) { $('loginErr').textContent = err.message; }
+  });
+  $('filters').addEventListener('submit', (e) => { e.preventDefault(); page = 1; load(); });
+  $('period').addEventListener('change', () => document.querySelectorAll('.custom').forEach((el) => el.classList.toggle('hidden', $('period').value !== 'custom')));
+  $('prev').addEventListener('click', () => { page -= 1; load(); });
+  $('next').addEventListener('click', () => { page += 1; load(); });
+  $('xlsx').addEventListener('click', () => download('xlsx'));
+  $('pdf').addEventListener('click', () => download('pdf'));
+})();
+</script>
+</body>
+</html>

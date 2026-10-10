@@ -31,6 +31,16 @@ function createTestDb() {
     implementation: () => crypto.randomUUID(),
   });
 
+  // pg-mem has no replace(); real Postgres does (used for title matching).
+  for (const t of ['text', 'varchar']) {
+    db.public.registerFunction({
+      name: 'replace',
+      args: [t, 'text', 'text'],
+      returns: 'text',
+      implementation: (str, from, to) => (str == null ? null : String(str).split(from).join(to)),
+    });
+  }
+
   const migrationsDir = path.join(__dirname, '../../src/db/migrations');
 
   let init = fs.readFileSync(path.join(migrationsDir, '001_init.sql'), 'utf-8');

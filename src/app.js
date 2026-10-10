@@ -76,6 +76,16 @@ if (env.nodeEnv !== 'test') {
   );
 }
 
+// Self-contained analytics page (sign in with a dashboard admin account).
+// Served with its own CSP because the page uses inline script/style.
+app.get('/analytics-dashboard', (req, res) => {
+  res.set(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:"
+  );
+  res.sendFile(require('path').join(__dirname, 'public', 'analytics.html'));
+});
+
 app.use('/api', routes);
 
 app.use(notFoundHandler);

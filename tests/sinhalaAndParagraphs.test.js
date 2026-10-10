@@ -278,3 +278,57 @@ describe('stripBoilerplate on single-line documents (regression: empty reply -> 
     expect(stripBoilerplate('(R2L Digital Triage System — Knowledge Base Type: Police)\n\nAnswer here.')).toBe('Answer here.');
   });
 });
+
+describe('formatKnowledgeDocument (English template -> readable paragraphs)', () => {
+  const { formatKnowledgeDocument } = require('../src/services/triage/replyFormatter');
+  const doc =
+    'R2L DIGITAL TRIAGE — CATEGORY: Financial, Labor & Microfinance Exploitation SCENARIO: Illegal Leasing Seizures & Debt Collection Harassment GOLDEN RULE FOR FINANCIAL EXPLOITATION Do not sign any documents. USER SITUATION A vehicle was seized by a leasing company using force. GUIDANCE Leasing companies can recover assets, but cannot use force. IMMEDIATE ACTION If assaulted, go to hospital. REFERRAL / CONTACTS - If registered, seek relief through the Financial Ombudsman of Sri Lanka. Phone: 011-2595624. Website / complaint form: [www.financialombudsman.lk](https://www.financialombudsman.lk) - R2L support: 0772255158';
+  it('drops the header and golden rule, splits sections, lists contacts, unwraps links', () => {
+    const out = formatKnowledgeDocument(doc);
+    expect(out).not.toMatch(/R2L DIGITAL TRIAGE|GOLDEN RULE|USER SITUATION/);
+    expect(out.split('\n\n')).toHaveLength(4);
+    expect(out).toContain('Guidance: Leasing companies');
+    expect(out).toContain('What to do now: If assaulted');
+    expect(out).toContain('• R2L support: 0772255158');
+    expect(out).toContain('www.financialombudsman.lk');
+    expect(out).not.toContain('](');
+  });
+  it('leaves non-template text alone', () => {
+    expect(formatKnowledgeDocument('Just a plain answer.')).toBe('Just a plain answer.');
+  });
+});
+
+describe('document title matching tolerates _ and - in titles', () => {
+  it('matches "Police_Medical-Negligence" for the keyword "medical negligence"', async () => {
+    const mockDb = require('./helpers/mockDb');
+    const { v4: uuid } = require('uuid');
+    mockDb.__reset();
+    const id = uuid();
+    await mockDb.query(`INSERT INTO documents (id, title, file_path, language, status) VALUES ($1, $2, 'x', 'en', 'processed')`, [id, 'Police_Medical-Negligence']);
+    await mockDb.query(`INSERT INTO document_chunks (id, document_id, chunk_index, content) VALUES ($1, $2, 0, 'hello')`, [uuid(), id]);
+    const { getScenarioDocumentContent } = require('../src/services/triage/scenarioLookup');
+    const r = await getScenarioDocumentContent({ titleKeywords: ['medical negligence'] }, 'en');
+    expect(r.found).toBe(true);
+  });
+});
+
+describe('document matching by the SCENARIO line (title does not contain the keywords)', () => {
+  it('finds "Land_State_Transfers" for "state land" via its SCENARIO line', async () => {
+    const mockDb = require('./helpers/mockDb');
+    const { v4: uuid } = require('uuid');
+    mockDb.__reset();
+    const id = uuid();
+    await mockDb.query(`INSERT INTO documents (id, title, file_path, language, status) VALUES ($1, 'Land_Doc_3', 'x', 'en', 'processed')`, [id]);
+    await mockDb.query(`INSERT INTO document_chunks (id, document_id, chunk_index, content) VALUES ($1, $2, 0, $3)`, [
+      uuid(), id,
+      'R2L DIGITAL TRIAGE — CATEGORY: Land, Housing SCENARIO: State Land Transfers & Permit Cancellations GOLDEN RULE Never leave. USER SITUATION text',
+    ]);
+    const { getScenarioDocumentContent } = require('../src/services/triage/scenarioLookup');
+    const r = await getScenarioDocumentContent({ titleKeywords: ['state land', 'permit'] }, 'en');
+    expect(r.found).toBe(true);
+    expect(r.title).toBe('Land_Doc_3');
+    // the category-wide golden-rule text must NOT cause a different scenario to match
+    const other = await getScenarioDocumentContent({ titleKeywords: ['elephant'] }, 'en');
+    expect(other.found).toBe(false);
+  });
+});
