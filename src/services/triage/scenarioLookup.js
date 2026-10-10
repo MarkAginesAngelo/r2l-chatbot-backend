@@ -47,7 +47,7 @@ async function getScenarioDocumentContent(scenario, language = 'en') {
     return { found: false };
   }
 
-  const conditions = scenario.titleKeywords.map((_, i) => `title ILIKE $${i + 1}`).join(' OR ');
+  const conditions = scenario.titleKeywords.map((_, i) => `replace(replace(title, '_', ' '), '-', ' ') ILIKE $${i + 1}`).join(' OR ');
   const params = scenario.titleKeywords.map((kw) => `%${kw}%`);
   const langParamIndex = params.length + 1;
 

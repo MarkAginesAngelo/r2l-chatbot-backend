@@ -12,7 +12,7 @@ const { getQuickActionsForCategory } = require('./quickActions');
 const { getScenariosForCategory, resolveScenarioSelection, OTHER_OPTION_LABEL, OTHER_OPTION_I18N } = require('./scenarios');
 const { getScenarioDocumentContent } = require('./scenarioLookup');
 const { translateText, translateDocument } = require('../ai/openaiClient');
-const { stripBoilerplate } = require('./replyFormatter');
+const { stripBoilerplate, formatKnowledgeDocument } = require('./replyFormatter');
 const { getScenarioParts } = require('./localContent');
 
 /**
@@ -316,7 +316,7 @@ async function handleTriageStage(conversation, rawMessage) {
     const docLang = String(doc.documentLanguage || '').trim().toLowerCase();
     const targetLang = String(language || '').trim().toLowerCase();
     const reply =
-      docLang === targetLang ? stripBoilerplate(doc.content) : await translateDocument(doc.content, language);
+      docLang === targetLang ? formatKnowledgeDocument(stripBoilerplate(doc.content)) : await translateDocument(doc.content, language);
     return {
       reply,
       newStage: 'in_chat',

@@ -11,7 +11,7 @@ const db = require('../../config/db');
 async function buildTitleKeywordFilter(titleKeywords, language = 'en') {
   if (!titleKeywords || titleKeywords.length === 0) return undefined;
 
-  const conditions = titleKeywords.map((_, i) => `title ILIKE $${i + 1}`).join(' OR ');
+  const conditions = titleKeywords.map((_, i) => `replace(replace(title, '_', ' '), '-', ' ') ILIKE $${i + 1}`).join(' OR ');
   const params = titleKeywords.map((kw) => `%${kw}%`);
 
   const langParamIndex = params.length + 1;

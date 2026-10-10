@@ -94,4 +94,58 @@ function buildReplyParts(reply, stage) {
   return parts.length ? parts : [reply];
 }
 
-module.exports = { stripBoilerplate, splitIntoParagraphs, buildReplyParts };
+/**
+ * Lays out an English knowledge-base document written in the R2L template
+ *   R2L DIGITAL TRIAGE — CATEGORY: … SCENARIO: … GOLDEN RULE … USER SITUATION …
+ *   GUIDANCE … IMMEDIATE ACTION … REFERRAL / CONTACTS - … - …
+ * as readable paragraphs. Documents uploaded with the old chunker arrive as
+ * ONE line, so the section labels are used to break it up. Text that doesn't
+ * use the template is returned unchanged.
+ */
+const SECTION_LABELS = ['USER SITUATION', 'GUIDANCE', 'IMMEDIATE ACTION', 'REFERRAL / CONTACTS', 'REFERRAL'];
+const LABEL_TITLES = {
+  GUIDANCE: 'Guidance',
+  'IMMEDIATE ACTION': 'What to do now',
+  'REFERRAL / CONTACTS': 'Contacts',
+  REFERRAL: 'Contacts',
+};
+
+function formatKnowledgeDocument(text) {
+  const src = String(text || '');
+  if (!/\bUSER SITUATION\b|\bIMMEDIATE ACTION\b|\bREFERRAL \/ CONTACTS\b/.test(src)) return src;
+
+  let t = src.replace(/\r\n?/g, '\n').replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '$1'); // [x](url) -> x
+
+  // Drop the staff header and the Golden Rule (already shown when the
+  // category was chosen) — everything before the first real section.
+  const first = t.search(/\bUSER SITUATION\b/);
+  if (first > -1) t = t.slice(first);
+
+  const pattern = new RegExp(`(?:^|\\s)(${SECTION_LABELS.map((l) => l.replace(/[/]/g, '\\/')).join('|')})\\b[:\\s]*`, 'g');
+  const parts = [];
+  let last = 0;
+  let label = null;
+  let m;
+  while ((m = pattern.exec(t)) !== null) {
+    if (label !== null || m.index > last) parts.push({ label, body: t.slice(last, m.index).trim() });
+    label = m[1];
+    last = pattern.lastIndex;
+  }
+  parts.push({ label, body: t.slice(last).trim() });
+
+  const out = [];
+  for (const { label: l, body } of parts) {
+    if (!body) continue;
+    if (!l || l === 'USER SITUATION') {
+      out.push(body);
+    } else if (l === 'REFERRAL / CONTACTS' || l === 'REFERRAL') {
+      const items = body.split(/\s+-\s+|\n-\s*/).map((x) => x.replace(/^-\s*/, '').trim()).filter(Boolean);
+      out.push(`${LABEL_TITLES[l]}:\n${items.map((i) => `• ${i}`).join('\n')}`);
+    } else {
+      out.push(`${LABEL_TITLES[l]}: ${body}`);
+    }
+  }
+  return out.join('\n\n');
+}
+
+module.exports = { stripBoilerplate, formatKnowledgeDocument, splitIntoParagraphs, buildReplyParts };
