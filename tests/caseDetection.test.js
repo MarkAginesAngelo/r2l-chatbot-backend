@@ -17,6 +17,7 @@ beforeEach(() => {
   openaiClient.detectLanguage.mockResolvedValue('en');
   openaiClient.translateToEnglish.mockImplementation(async (t, l) => (l === 'en' ? t : `[en] ${t}`));
   openaiClient.generateAnswer.mockResolvedValue('MOCKED GROUNDED ANSWER');
+  openaiClient.generateOpenAnswer.mockResolvedValue('MOCKED GROUNDED ANSWER');
   openaiClient.classifyCase.mockResolvedValue(null);
   retrieveRelevantChunks.mockResolvedValue([{ score: 0.95, documentId: uuidv4(), chunkId: uuidv4(), title: 't', content: 'x' }]);
 });
@@ -85,7 +86,7 @@ describe('conversation re-categorising as the chat goes on', () => {
     await reachScenario(psid, 1, 1);
     openaiClient.classifyCase.mockResolvedValue({ scenario: 'financial-microfinance', confidence: 0.9 });
     await handleIncomingMessage({ channel: 'messenger', externalId: psid, text: 'මයික්‍රොෆිනෑන්ස් ණය ගැන' });
-    const ctx = openaiClient.generateAnswer.mock.calls.at(-1)[0].contextChunks;
+    const ctx = openaiClient.generateOpenAnswer.mock.calls.at(-1)[0].contextChunks;
     expect(ctx[0].score).toBe(1);
     expect(/[඀-෿]/.test(ctx[0].content)).toBe(true);
   });

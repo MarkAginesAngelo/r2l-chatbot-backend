@@ -49,6 +49,38 @@ async function generateAnswer({ systemPrompt, userMessage, contextChunks, langua
   return completion.choices[0].message.content;
 }
 
+/**
+ * Open (hybrid) answer: uses the approved knowledge base when it has
+ * relevant material, and otherwise answers from the model's own knowledge.
+ * `contextChunks` may be empty. The model ends its reply with [[HANDOFF]] when
+ * a real person at R2L genuinely needs to take over (the caller strips it).
+ */
+async function generateOpenAnswer({ systemPrompt, userMessage, contextChunks = [], language, history = [] }) {
+  const contextBlock = contextChunks.length
+    ? contextChunks.map((c, i) => `[${i + 1}] ${c.content}`).join('\n\n')
+    : '(no relevant approved material was found for this question)';
+
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...history.map((h) => ({ role: h.role, content: h.content })),
+    {
+      role: 'user',
+      content:
+        `Respond in language code: ${language}.\n\n` +
+        `Approved R2L knowledge base material:\n${contextBlock}\n\n` +
+        `User message: ${userMessage}`,
+    },
+  ];
+
+  const completion = await client.chat.completions.create({
+    model: env.openai.chatModel,
+    messages,
+    temperature: 0.4,
+  });
+
+  return completion.choices[0].message.content;
+}
+
 async function detectLanguage(text) {
   if (/[\u0D80-\u0DFF]/.test(text)) return 'si';
   if (/[\u0B80-\u0BFF]/.test(text)) return 'ta';
@@ -195,6 +227,7 @@ module.exports = {
   embedText,
   embedBatch,
   generateAnswer,
+  generateOpenAnswer,
   detectLanguage,
   translateText,
   translateDocument,

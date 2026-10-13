@@ -11,6 +11,11 @@ const DEFAULTS = {
   // migration 004 so it's editable via PUT /api/settings/session_reset_hours
   // without a redeploy (R2L asked to start at 24h and tune it from there).
   session_reset_hours: 24,
+  // 'hybrid'  — answer from the knowledge base when it has the material and
+  //             from the AI's general knowledge otherwise (default).
+  // 'kb_only' — answer only from the knowledge base; hand off when it lacks it.
+  // Change live with PUT /api/settings/ai_mode  { "value": "kb_only" }.
+  ai_mode: 'hybrid',
 };
 
 async function getSetting(key) {

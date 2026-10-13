@@ -44,6 +44,7 @@ beforeEach(() => {
   openaiClient.translateToEnglish.mockImplementation(async (t, l) => (l === 'en' ? t : `[en] ${t}`));
   openaiClient.translateText.mockImplementation(async (t, l) => (l === 'en' ? t : `[${l}] ${t}`));
   openaiClient.generateAnswer.mockResolvedValue('MOCKED GROUNDED ANSWER');
+  openaiClient.generateOpenAnswer.mockResolvedValue('MOCKED GROUNDED ANSWER');
   retrieveRelevantChunks.mockResolvedValue([
     { score: 0.95, documentId: uuidv4(), chunkId: uuidv4(), title: 'Police Torture', content: 'Seek medical attention.' },
   ]);
@@ -146,7 +147,8 @@ describe('chat pipeline — full triage flow', () => {
     );
   });
 
-  it('flags a human handoff when retrieval confidence is below threshold', async () => {
+  it('flags a human handoff when retrieval confidence is below threshold (kb_only mode)', async () => {
+    await mockDb.query(`INSERT INTO settings (key, value) VALUES ('ai_mode', $1)`, [JSON.stringify('kb_only')]); // strict mode hands off
     retrieveRelevantChunks.mockResolvedValue([{ score: 0.2, documentId: uuidv4(), chunkId: uuidv4(), title: 't', content: 'x' }]);
 
     const start = await send({ message: 'hi' });
@@ -159,7 +161,8 @@ describe('chat pipeline — full triage flow', () => {
     expect(res.body.needsHuman).toBe(true);
   });
 
-  it('flags a human handoff when nothing is retrieved at all', async () => {
+  it('flags a human handoff when nothing is retrieved at all (kb_only mode)', async () => {
+    await mockDb.query(`INSERT INTO settings (key, value) VALUES ('ai_mode', $1)`, [JSON.stringify('kb_only')]); // strict mode hands off
     retrieveRelevantChunks.mockResolvedValue([]);
 
     const start = await send({ message: 'hi' });
@@ -285,7 +288,7 @@ describe('scenario sub-menu (police category)', () => {
     expect(queryUsed).toContain('assaulted'); // prior turn's content carried into the query
   });
 
-  it('passes recent history to generateAnswer, not just the current message', async () => {
+  it('passes recent history to the answer generator, not just the current message', async () => {
     const start = await send({ message: 'hi' });
     const convoId = start.body.conversationId;
     await send({ message: '1', conversationId: convoId });
@@ -293,10 +296,10 @@ describe('scenario sub-menu (police category)', () => {
     await send({ message: 'other', conversationId: convoId });
     await send({ message: 'the police assaulted me during my arrest', conversationId: convoId });
 
-    openaiClient.generateAnswer.mockClear();
+    openaiClient.generateOpenAnswer.mockClear();
     await send({ message: 'what should I do now', conversationId: convoId });
 
-    const [args] = openaiClient.generateAnswer.mock.calls[0];
+    const [args] = openaiClient.generateOpenAnswer.mock.calls[0];
     expect(args.history.length).toBeGreaterThan(0);
     expect(args.history.some((h) => h.content.includes('assaulted'))).toBe(true);
   });

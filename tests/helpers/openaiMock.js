@@ -12,6 +12,7 @@ function createOpenAiMock() {
     // By default the classifier has no opinion, so existing tests keep their scenario.
     classifyCase: jest.fn().mockResolvedValue(null),
     generateAnswer: jest.fn().mockResolvedValue('MOCKED GROUNDED ANSWER'),
+    generateOpenAnswer: jest.fn().mockResolvedValue('MOCKED OPEN ANSWER'),
   };
 }
 

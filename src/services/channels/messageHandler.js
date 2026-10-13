@@ -11,6 +11,7 @@ const { resolveQuickAction, getQuickActionReply } = require('../triage/quickActi
 const { findScenarioByKey } = require('../triage/scenarios');
 const { buildReplyParts } = require('../triage/replyFormatter');
 const { detectCase, curatedContextChunk } = require('../triage/caseClassifier');
+const { composeAnswer } = require('../ai/answerPolicy');
 
 const SYSTEM_PROMPT = `You are the official assistant for Right to Life Sri Lanka (R2L), an NGO.
 Answer only using the provided context from R2L's approved knowledge base.
@@ -296,17 +297,18 @@ async function handleIncomingMessage({ channel, externalId, displayName, text })
     bestScore = Math.max(bestScore, curated.score);
   }
 
-  const needsHuman = chunks.length === 0 || bestScore < threshold;
-
-  const reply = needsHuman
-    ? HANDOFF_MESSAGES[language] || HANDOFF_MESSAGES.en
-    : await generateAnswer({
-        systemPrompt: SYSTEM_PROMPT,
-        userMessage: text,
-        contextChunks: chunks,
-        language,
-        history: priorTurns,
-      });
+  // Hybrid mode (default): knowledge base first, the AI's own knowledge when
+  // the knowledge base has nothing relevant. `ai_mode = kb_only` restores the
+  // old behaviour of handing off whenever the knowledge base can't answer.
+  const { reply, needsHuman } = await composeAnswer({
+    text,
+    language,
+    chunks,
+    bestScore,
+    threshold,
+    history: priorTurns,
+    kbOnlyHandoff: HANDOFF_MESSAGES,
+  });
 
   await storeMessage(conversation.id, 'ai', reply, language, chunks.map((c) => c.chunkId).filter(Boolean));
 

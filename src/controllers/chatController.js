@@ -11,6 +11,7 @@ const { getQdrantFilterForCategory, getQdrantFilterForScenario } = require('../s
 const { resolveQuickAction, getQuickActionReply } = require('../services/triage/quickActions');
 const { findScenarioByKey } = require('../services/triage/scenarios');
 const { buildReplyParts } = require('../services/triage/replyFormatter');
+const { composeAnswer } = require('../services/ai/answerPolicy');
 const { detectCase, curatedContextChunk } = require('../services/triage/caseClassifier');
 
 const SYSTEM_PROMPT = `You are the official assistant for Right to Life Sri Lanka (R2L), an NGO.
@@ -230,21 +231,14 @@ async function chat(req, res) {
     bestScore = Math.max(bestScore, curated.score);
   }
 
-  const needsHuman = chunks.length === 0 || bestScore < threshold;
-
-  const reply = needsHuman
-    ? {
-        en: "I don't have enough approved information to answer that confidently. Would you like me to connect you with an R2L representative?",
-        si: 'මට එය විශ්වාසයෙන් පිළිතුරු දීමට ප්‍රමාණවත් අනුමත තොරතුරු නොමැත. ඔබට R2L නියෝජිතයෙකු සමඟ සම්බන්ධ කරන්නද?',
-        ta: 'இதற்கு நம்பிக்கையுடன் பதிலளிக்க போதுமான அங்கீகரிக்கப்பட்ட தகவல் என்னிடம் இல்லை. R2L பிரதிநிதியுடன் இணைக்கவா?',
-      }[language]
-    : await generateAnswer({
-        systemPrompt: SYSTEM_PROMPT,
-        userMessage: message,
-        contextChunks: chunks,
-        language,
-        history: priorTurns,
-      });
+  const { reply, needsHuman } = await composeAnswer({
+    text: message,
+    language,
+    chunks,
+    bestScore,
+    threshold,
+    history: priorTurns,
+  });
 
   await storeMessage(convo.id, 'ai', reply, language, chunks.map((c) => c.chunkId).filter(Boolean));
 
