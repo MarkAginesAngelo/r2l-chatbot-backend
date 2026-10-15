@@ -79,3 +79,27 @@ describe('channel flow', () => {
     expect(rows[0].status).not.toBe('needs_human');
   });
 });
+
+describe('general-document fallback', () => {
+  const { widenToAllDocuments } = require('../src/services/rag/generalFallback');
+  const doc = (score) => [{ score, documentId: uuidv4(), chunkId: uuidv4(), title: 'UDHR (Sinhala)', content: 'ස' }];
+
+  it('skips the extra search when the scoped result is already strong', async () => {
+    const r = await widenToAllDocuments({ query: 'q', originalText: 'q', language: 'en', topK: 5, chunks: doc(0.9), bestScore: 0.9, threshold: 0.72 });
+    expect(r.bestScore).toBe(0.9);
+    expect(retrieveRelevantChunks).not.toHaveBeenCalled();
+  });
+
+  it('searches all documents, also in the original language, and keeps the best', async () => {
+    retrieveRelevantChunks.mockResolvedValueOnce(doc(0.4)).mockResolvedValueOnce(doc(0.8));
+    const r = await widenToAllDocuments({ query: 'my rights', originalText: 'මගේ අයිතිවාසිකම්', language: 'si', topK: 5, chunks: [], bestScore: 0, threshold: 0.72 });
+    expect(retrieveRelevantChunks).toHaveBeenCalledTimes(2);
+    expect(retrieveRelevantChunks.mock.calls[0][1].filter).toBeUndefined();
+    expect(r.bestScore).toBe(0.8);
+  });
+
+  it('hybrid mode still shows cross-language matches above the floor to the AI', async () => {
+    await composeAnswer({ text: 'q', language: 'en', threshold: 0.72, history: [], chunks: doc(0.55), bestScore: 0.55 });
+    expect(openaiClient.generateOpenAnswer.mock.calls[0][0].contextChunks).toHaveLength(1);
+  });
+});

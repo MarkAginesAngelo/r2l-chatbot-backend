@@ -12,6 +12,8 @@ const { findScenarioByKey } = require('../triage/scenarios');
 const { buildReplyParts } = require('../triage/replyFormatter');
 const { detectCase, curatedContextChunk } = require('../triage/caseClassifier');
 const { composeAnswer } = require('../ai/answerPolicy');
+const { widenToAllDocuments } = require('../rag/generalFallback');
+
 
 const SYSTEM_PROMPT = `You are the official assistant for Right to Life Sri Lanka (R2L), an NGO.
 Answer only using the provided context from R2L's approved knowledge base.
@@ -288,6 +290,18 @@ async function handleIncomingMessage({ channel, externalId, displayName, text })
       bestScore = widerBestScore;
     }
   }
+
+  // Still weak? Search every uploaded document (general reference material
+  // such as the Fundamental Rights chapter and the UDHR isn't tied to a scenario).
+  ({ chunks, bestScore } = await widenToAllDocuments({
+    query: contextualRetrievalQuery,
+    originalText: text,
+    language,
+    topK,
+    chunks,
+    bestScore,
+    threshold,
+  }));
 
   // Sinhala/Tamil: add the approved curated text for the active scenario so
   // the answer uses the reviewed wording, not just the English documents.

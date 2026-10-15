@@ -13,6 +13,7 @@ matters, and personal danger. People contacting you are often scared or in distr
 
 How to answer:
 1. If the approved R2L knowledge base material is relevant, use it as your main source and follow it closely.
+   Ignore any material that does not actually relate to the question.
    Hotline numbers, addresses, office names and R2L procedures may ONLY come from that material.
 2. If the material is missing or does not cover the question, still help: answer from your general knowledge,
    in a Sri Lankan context where relevant. Give practical, general information and next steps.
@@ -25,6 +26,11 @@ How to answer:
 6. If the person is in immediate danger, needs a lawyer to act for them, or the matter is serious and urgent,
    give the safest immediate steps and END your reply with the exact token [[HANDOFF]] on its own line so an
    R2L representative can take over. Do not use the token otherwise.`;
+
+// In hybrid mode, material below the strict threshold but above this floor is still
+// shown to the AI (cross-language matches, e.g. an English question against a Sinhala
+// document, score lower). The prompt tells it to use the material only if relevant.
+const HYBRID_MIN_SCORE = 0.45;
 
 const HANDOFF_TOKEN = /\s*\[\[HANDOFF\]\]\s*/g;
 
@@ -59,7 +65,7 @@ async function composeAnswer({ text, language, chunks, bestScore, threshold, his
   const raw = await generateOpenAnswer({
     systemPrompt: HYBRID_PROMPT,
     userMessage: text,
-    contextChunks: grounded ? chunks : [],
+    contextChunks: chunks.filter((c) => c.score >= Math.min(threshold, HYBRID_MIN_SCORE)),
     language,
     history,
   });

@@ -12,6 +12,8 @@ const { resolveQuickAction, getQuickActionReply } = require('../services/triage/
 const { findScenarioByKey } = require('../services/triage/scenarios');
 const { buildReplyParts } = require('../services/triage/replyFormatter');
 const { composeAnswer } = require('../services/ai/answerPolicy');
+const { widenToAllDocuments } = require('../services/rag/generalFallback');
+
 const { detectCase, curatedContextChunk } = require('../services/triage/caseClassifier');
 
 const SYSTEM_PROMPT = `You are the official assistant for Right to Life Sri Lanka (R2L), an NGO.
@@ -222,6 +224,18 @@ async function chat(req, res) {
       bestScore = widerBestScore;
     }
   }
+
+  // Still weak? Search every uploaded document (general reference material
+  // such as the Fundamental Rights chapter and the UDHR isn't tied to a scenario).
+  ({ chunks, bestScore } = await widenToAllDocuments({
+    query: contextualRetrievalQuery,
+    originalText: message,
+    language,
+    topK,
+    chunks,
+    bestScore,
+    threshold,
+  }));
 
   // Sinhala/Tamil: add the approved curated text for the active scenario so
   // the answer uses the reviewed wording, not just the English documents.
