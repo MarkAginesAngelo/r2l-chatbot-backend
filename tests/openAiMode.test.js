@@ -31,7 +31,7 @@ describe('composeAnswer', () => {
 
   it('hybrid (default): passes the knowledge base when it is strong', async () => {
     const r = await composeAnswer({ ...base, chunks: strong, bestScore: 0.95 });
-    expect(r).toEqual({ reply: 'MOCKED OPEN ANSWER', needsHuman: false });
+    expect(r).toMatchObject({ reply: 'MOCKED OPEN ANSWER', needsHuman: false });
     expect(openaiClient.generateOpenAnswer.mock.calls[0][0].contextChunks).toHaveLength(1);
   });
 
@@ -47,10 +47,19 @@ describe('composeAnswer', () => {
     expect(openaiClient.generateOpenAnswer.mock.calls[0][0].contextChunks).toEqual([]);
   });
 
+  it('hybrid: [[EMERGENCY]] and [[WRAP_UP]] are stripped and reported', async () => {
+    openaiClient.generateOpenAnswer.mockResolvedValue('Go now.\n[[EMERGENCY]]');
+    expect(await composeAnswer({ ...base, chunks: [], bestScore: 0 })).toMatchObject({ reply: 'Go now.', emergency: true, needsHuman: true, wrapUp: false });
+    openaiClient.generateOpenAnswer.mockResolvedValue('Take care.\n[[WRAP_UP]]');
+    expect(await composeAnswer({ ...base, chunks: [], bestScore: 0 })).toMatchObject({ reply: 'Take care.', wrapUp: true, emergency: false });
+    openaiClient.generateOpenAnswer.mockResolvedValue('Is anyone with you?\n[[WRAP_UP]]');
+    expect((await composeAnswer({ ...base, chunks: [], bestScore: 0 })).wrapUp).toBe(false);
+  });
+
   it('hybrid: [[HANDOFF]] is stripped and flags a human', async () => {
     openaiClient.generateOpenAnswer.mockResolvedValue('Get to safety now.\n[[HANDOFF]]');
     const r = await composeAnswer({ ...base, chunks: [], bestScore: 0 });
-    expect(r).toEqual({ reply: 'Get to safety now.', needsHuman: true });
+    expect(r).toMatchObject({ reply: 'Get to safety now.', needsHuman: true });
   });
 
   it('kb_only: hands off when the knowledge base cannot answer', async () => {
@@ -63,16 +72,14 @@ describe('composeAnswer', () => {
   it('kb_only: grounded answer uses the strict generator', async () => {
     await setMode('kb_only');
     const r = await composeAnswer({ ...base, chunks: strong, bestScore: 0.95 });
-    expect(r).toEqual({ reply: 'MOCKED GROUNDED ANSWER', needsHuman: false });
+    expect(r).toMatchObject({ reply: 'MOCKED GROUNDED ANSWER', needsHuman: false });
   });
 });
 
 describe('channel flow', () => {
   it('a question the knowledge base cannot answer gets an AI reply, no handoff', async () => {
     retrieveRelevantChunks.mockResolvedValue([]);
-    const send = (text) => handleIncomingMessage({ channel: 'messenger', externalId: 'psid-open', text });
-    for (const t of ['hi', '1', '1', '1']) await send(t);
-    const r = await send('how long does a court case usually take in Sri Lanka?');
+    const r = await handleIncomingMessage({ channel: 'messenger', externalId: 'psid-open', text: 'how long does a court case usually take in Sri Lanka?' });
     expect(r.reply).toBe('MOCKED OPEN ANSWER');
     expect(r.needsHuman).toBe(false);
     const { rows } = await mockDb.query(`SELECT status FROM conversations`);

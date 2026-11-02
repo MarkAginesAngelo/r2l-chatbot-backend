@@ -61,6 +61,7 @@ docker exec -i r2l_postgres psql -U r2l_user -d r2l_chatbot < src/db/migrations/
 docker exec -i r2l_postgres psql -U r2l_user -d r2l_chatbot < src/db/migrations/002_triage_flow.sql
 docker exec -i r2l_postgres psql -U r2l_user -d r2l_chatbot < src/db/migrations/003_handoff_priority.sql
 docker exec -i r2l_postgres psql -U r2l_user -d r2l_chatbot < src/db/migrations/004_scenario_and_session_reset.sql
+docker exec -i r2l_postgres psql -U r2l_user -d r2l_chatbot < src/db/migrations/005_adaptive_flow.sql
 
 docker exec -it r2l_api node scripts/seedAdmin.js "Your Name" admin@r2l.org "ChooseAStrongPassword123!"
 ```

@@ -2,28 +2,41 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../config/db');
 const { AppError } = require('../middlewares/errorHandler');
 
+// The phone number staff can actually call: the number the person gave when they
+// consented, or — for WhatsApp, where the client id IS the number — that number.
+// (A Messenger client's `phone` is just an internal page-scoped id.)
+const CONTACT_NUMBER_SQL = `COALESCE(cl.contact_phone, CASE WHEN c.channel = 'whatsapp' THEN cl.phone END)`;
+
 async function listConversations(req, res) {
-  const { status, channel, assignedToMe } = req.query;
+  const { status, channel, assignedToMe, handoffStatus } = req.query;
   const conditions = [];
   const params = [];
 
   if (status) {
     params.push(status);
-    conditions.push(`status = $${params.length}`);
+    conditions.push(`c.status = $${params.length}`);
   }
   if (channel) {
     params.push(channel);
-    conditions.push(`channel = $${params.length}`);
+    conditions.push(`c.channel = $${params.length}`);
+  }
+  if (handoffStatus) {
+    params.push(handoffStatus);
+    conditions.push(`c.handoff_status = $${params.length}`);
   }
   if (assignedToMe === 'true') {
     params.push(req.user.id);
-    conditions.push(`assigned_staff_id = $${params.length}`);
+    conditions.push(`c.assigned_staff_id = $${params.length}`);
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const { rows } = await db.query(
-    `SELECT id, client_id, channel, language, status, assigned_staff_id, created_at, updated_at
-     FROM conversations ${where} ORDER BY updated_at DESC LIMIT 100`,
+    `SELECT c.id, c.client_id, c.channel, c.language, c.status, c.category, c.scenario, c.handoff_status, c.consent_status,
+            c.assigned_staff_id, c.created_at, c.updated_at,
+            cl.name AS client_name, ${CONTACT_NUMBER_SQL} AS client_phone
+     FROM conversations c
+     LEFT JOIN clients cl ON cl.id = c.client_id
+     ${where} ORDER BY c.updated_at DESC LIMIT 100`,
     params
   );
   res.json({ conversations: rows });
@@ -38,7 +51,24 @@ async function getConversation(req, res) {
     [req.params.id]
   );
 
-  res.json({ ...convoRows[0], messages });
+  // Personal details the person agreed to share (only present after consent).
+  let client = null;
+  if (convoRows[0].client_id) {
+    const { rows } = await db.query('SELECT * FROM clients WHERE id = $1', [convoRows[0].client_id]);
+    const c = rows[0];
+    if (c) {
+      client = {
+        id: c.id,
+        name: c.name,
+        contact_number: c.contact_phone || (convoRows[0].channel === 'whatsapp' ? c.phone : null),
+        age: c.age,
+        location: c.location,
+        consent_given_at: c.consent_given_at,
+      };
+    }
+  }
+
+  res.json({ ...convoRows[0], client, messages });
 }
 
 async function staffReply(req, res) {

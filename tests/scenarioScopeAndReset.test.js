@@ -29,73 +29,42 @@ beforeEach(() => {
   openaiClient.detectLanguage.mockResolvedValue('en');
   openaiClient.translateToEnglish.mockImplementation(async (t, l) => (l === 'en' ? t : `[en] ${t}`));
   openaiClient.translateText.mockImplementation(async (t, l) => (l === 'en' ? t : `[${l}] ${t}`));
-  openaiClient.generateAnswer.mockResolvedValue('MOCKED GROUNDED ANSWER');
+  openaiClient.generateOpenAnswer.mockResolvedValue('MOCKED OPEN ANSWER');
+  openaiClient.classifyCase.mockResolvedValue(null);
   retrieveRelevantChunks.mockResolvedValue([
     { score: 0.95, documentId: uuidv4(), chunkId: uuidv4(), title: 't', content: 'x' },
   ]);
 });
 
-async function reachScenario(psid, categoryNum, scenarioNum) {
-  await handleIncomingMessage({ channel: 'messenger', externalId: psid, text: 'hi' });
-  await handleIncomingMessage({ channel: 'messenger', externalId: psid, text: '1' }); // English
-  await handleIncomingMessage({ channel: 'messenger', externalId: psid, text: String(categoryNum) }); // category
-  return handleIncomingMessage({ channel: 'messenger', externalId: psid, text: String(scenarioNum) }); // scenario
-}
+const send = (psid) => (text) => handleIncomingMessage({ channel: 'messenger', externalId: psid, text });
+const row = async (psid) =>
+  (await mockDb.query('SELECT category, scenario FROM conversations WHERE client_id = (SELECT id FROM clients WHERE phone = $1)', [psid])).rows[0];
 
-describe('scenario-scoped retrieval (item 2: no cross-scenario contact leakage)', () => {
-  it('persists the picked scenario key on the conversation row', async () => {
-    const psid = 'scn-1';
-    await reachScenario(psid, 2, 1); // Cyber -> NCII/Sextortion
-
-    const { rows } = await mockDb.query('SELECT category, scenario FROM conversations WHERE client_id = (SELECT id FROM clients WHERE phone = $1)', [psid]);
-    expect(rows[0]).toEqual({ category: 'cyber', scenario: 'cyber-ncii-sextortion' });
+describe('scenario-scoped retrieval (no cross-scenario contact leakage)', () => {
+  it('remembers the scenario the AI recognised on the conversation row', async () => {
+    openaiClient.classifyCase.mockResolvedValue({ scenario: 'cyber-ncii-sextortion', confidence: 0.9 });
+    await send('scn-1')('someone is blackmailing me with my private photos');
+    expect(await row('scn-1')).toEqual({ category: 'cyber', scenario: 'cyber-ncii-sextortion' });
   });
 
-  it('scopes a follow-up question to the picked scenario, not the whole category', async () => {
-    const psid = 'scn-2';
-    await reachScenario(psid, 2, 1); // Cyber -> NCII/Sextortion (doc not uploaded in this test, degrades gracefully)
+  it('scopes a follow-up question to the recognised scenario before widening', async () => {
+    openaiClient.classifyCase.mockResolvedValue({ scenario: 'cyber-ncii-sextortion', confidence: 0.9 });
+    await send('scn-2')('someone is blackmailing me with my private photos');
 
     retrieveRelevantChunks.mockClear();
-    await handleIncomingMessage({ channel: 'messenger', externalId: psid, text: 'what number do I call' });
+    openaiClient.classifyCase.mockResolvedValue(null);
+    await send('scn-2')('what number do I call');
 
     const [, options] = retrieveRelevantChunks.mock.calls[0];
-    // A scenario filter was attempted (even though it resolves to undefined
-    // here since no documents are uploaded in this test) — the important
-    // thing is retrieval was NOT simply handed the category-wide filter
-    // straight away without first trying the narrower scenario scope.
     expect(options).toHaveProperty('filter');
   });
 
-  it('clears the scenario when the user picks "Other" instead of a specific scenario', async () => {
-    const psid = 'scn-3';
-    await handleIncomingMessage({ channel: 'messenger', externalId: psid, text: 'hi' });
-    await handleIncomingMessage({ channel: 'messenger', externalId: psid, text: '1' });
-    await handleIncomingMessage({ channel: 'messenger', externalId: psid, text: '1' }); // Police
-    await handleIncomingMessage({ channel: 'messenger', externalId: psid, text: '7' }); // Other (6 scenarios + Other)
-
-    const { rows } = await mockDb.query(
-      'SELECT scenario FROM conversations WHERE client_id = (SELECT id FROM clients WHERE phone = $1)',
-      [psid]
-    );
-    expect(rows[0].scenario).toBeNull();
-  });
-
-  it('clears the scenario when a free-typed message falls through mid scenario-menu', async () => {
-    const psid = 'scn-4';
-    await handleIncomingMessage({ channel: 'messenger', externalId: psid, text: 'hi' });
-    await handleIncomingMessage({ channel: 'messenger', externalId: psid, text: '1' });
-    await handleIncomingMessage({ channel: 'messenger', externalId: psid, text: '1' }); // Police -> awaiting_scenario
-    await handleIncomingMessage({
-      channel: 'messenger',
-      externalId: psid,
-      text: 'the police took my brother and we have no news',
-    });
-
-    const { rows } = await mockDb.query(
-      'SELECT scenario FROM conversations WHERE client_id = (SELECT id FROM clients WHERE phone = $1)',
-      [psid]
-    );
-    expect(rows[0].scenario).toBeNull();
+  it('keeps the scenario when the next message is a vague follow-up', async () => {
+    openaiClient.classifyCase.mockResolvedValue({ scenario: 'cyber-ncii-sextortion', confidence: 0.9 });
+    await send('scn-3')('someone is blackmailing me with my private photos');
+    openaiClient.classifyCase.mockResolvedValue(null);
+    await send('scn-3')('ok and then?');
+    expect((await row('scn-3')).scenario).toBe('cyber-ncii-sextortion');
   });
 
   it('getQdrantFilterForScenario is scoped narrower than getQdrantFilterForCategory (different keyword sets)', async () => {
@@ -119,52 +88,37 @@ describe('scenario-scoped retrieval (item 2: no cross-scenario contact leakage)'
   });
 });
 
-describe('24h session reset (item 3: returning user gets asked from the start)', () => {
+describe('session reset (a returning user starts a fresh conversation)', () => {
   it('resumes the same open conversation for a message sent well within the reset window', async () => {
     const psid = 'reset-1';
-    const first = await handleIncomingMessage({ channel: 'messenger', externalId: psid, text: 'hi' });
-    const second = await handleIncomingMessage({ channel: 'messenger', externalId: psid, text: '1' });
+    const first = await send(psid)('hi');
+    const second = await send(psid)('my landlord evicted me');
     expect(first.conversationId).toBe(second.conversationId);
-    expect(second.stage).toBe('awaiting_category');
   });
 
-  it('starts a brand new conversation, back at the greeting, once the conversation is older than session_reset_hours', async () => {
+  it('starts a brand new conversation, with a greeting, once the conversation is older than session_reset_hours', async () => {
     const psid = 'reset-2';
-    const first = await handleIncomingMessage({ channel: 'messenger', externalId: psid, text: 'hi' });
-    await handleIncomingMessage({ channel: 'messenger', externalId: psid, text: '1' }); // English
-    await handleIncomingMessage({ channel: 'messenger', externalId: psid, text: '1' }); // Police -> awaiting_scenario
+    const first = await send(psid)('hi');
+    await send(psid)('the police arrested my brother');
 
-    // Simulate 25 hours passing (default threshold is 24) by backdating the
-    // conversation's updated_at directly, the same way a real gap in
-    // messages would age it.
-    await mockDb.query(
-      `UPDATE conversations SET updated_at = now() - interval '25 hours' WHERE id = $1`,
-      [first.conversationId]
-    );
+    await mockDb.query(`UPDATE conversations SET updated_at = now() - interval '25 hours' WHERE id = $1`, [first.conversationId]);
 
-    const returning = await handleIncomingMessage({ channel: 'messenger', externalId: psid, text: 'hi again' });
+    const returning = await send(psid)('hi again');
     expect(returning.conversationId).not.toBe(first.conversationId);
-    expect(returning.stage).toBe('awaiting_language');
+    expect(returning.reply).toMatch(/welcome to Right to Life/);
 
-    const { rows } = await mockDb.query('SELECT status, stage FROM conversations WHERE id = $1', [
-      first.conversationId,
-    ]);
+    const { rows } = await mockDb.query('SELECT status FROM conversations WHERE id = $1', [first.conversationId]);
     expect(rows[0].status).toBe('closed');
   });
 
   it('honors a custom session_reset_hours setting instead of the 24h default', async () => {
-    await mockDb.query(
-      `INSERT INTO settings (key, value) VALUES ('session_reset_hours', '1') ON CONFLICT (key) DO UPDATE SET value = $1`,
-      ['1']
-    );
+    await mockDb.query(`INSERT INTO settings (key, value) VALUES ('session_reset_hours', '1') ON CONFLICT (key) DO UPDATE SET value = $1`, ['1']);
 
     const psid = 'reset-3';
-    const first = await handleIncomingMessage({ channel: 'messenger', externalId: psid, text: 'hi' });
-    await mockDb.query(`UPDATE conversations SET updated_at = now() - interval '2 hours' WHERE id = $1`, [
-      first.conversationId,
-    ]);
+    const first = await send(psid)('hi');
+    await mockDb.query(`UPDATE conversations SET updated_at = now() - interval '2 hours' WHERE id = $1`, [first.conversationId]);
 
-    const returning = await handleIncomingMessage({ channel: 'messenger', externalId: psid, text: 'hi again' });
+    const returning = await send(psid)('hi again');
     expect(returning.conversationId).not.toBe(first.conversationId);
   });
 });

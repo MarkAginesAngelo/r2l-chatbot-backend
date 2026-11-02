@@ -18,35 +18,31 @@ beforeEach(() => {
   openaiClient.detectLanguage.mockResolvedValue('en');
   openaiClient.translateToEnglish.mockImplementation(async (t, l) => (l === 'en' ? t : `[en] ${t}`));
   openaiClient.translateText.mockImplementation(async (t, l) => (l === 'en' ? t : `[${l}] ${t}`));
-  openaiClient.generateAnswer.mockResolvedValue('MOCKED GROUNDED ANSWER');
+  openaiClient.generateOpenAnswer.mockResolvedValue('MOCKED OPEN ANSWER');
+  openaiClient.classifyCase.mockResolvedValue(null);
   retrieveRelevantChunks.mockResolvedValue([
-    { score: 0.95, documentId: 'd', chunkId: 'c', title: 't', content: 'x' },
+    { score: 0.95, documentId: require('uuid').v4(), chunkId: require('uuid').v4(), title: 't', content: 'x' },
   ]);
 });
 
 describe('Messenger conversation continuity (regression: PSID identity bug)', () => {
   const PSID = '1234567890';
+  const send = (text, extra = {}) =>
+    handleIncomingMessage({ channel: 'messenger', externalId: PSID, displayName: 'Test User', text, ...extra });
 
-  it('reuses the SAME conversation across messages from the same PSID, advancing through stages', async () => {
-    const turn1 = await handleIncomingMessage({ channel: 'messenger', externalId: PSID, displayName: 'Test User', text: 'hi' });
-    expect(turn1.stage).toBe('awaiting_language');
-
-    const turn2 = await handleIncomingMessage({ channel: 'messenger', externalId: PSID, displayName: 'Test User', text: '1' });
-    // This is the exact bug: before the fix, turn2 would ALSO come back as
-    // 'awaiting_language' (a brand new conversation, greeting repeated)
-    // instead of advancing to category selection.
-    expect(turn2.stage).toBe('awaiting_category');
-    expect(turn1.conversationId).toBe(turn2.conversationId);
-
-    const turn3 = await handleIncomingMessage({ channel: 'messenger', externalId: PSID, displayName: 'Test User', text: '1' });
-    expect(turn3.stage).toBe('awaiting_scenario');
+  it('reuses the SAME conversation across messages from the same PSID', async () => {
+    const turn1 = await send('hi');
+    const turn2 = await send('my landlord wants me out');
+    const turn3 = await send('he gave me 3 days');
+    // Before the fix every message created a brand new conversation.
+    expect(turn2.conversationId).toBe(turn1.conversationId);
     expect(turn3.conversationId).toBe(turn1.conversationId);
   });
 
   it('only creates ONE client row for repeated messages from the same PSID', async () => {
-    await handleIncomingMessage({ channel: 'messenger', externalId: PSID, displayName: 'Test User', text: 'hi' });
-    await handleIncomingMessage({ channel: 'messenger', externalId: PSID, displayName: 'Test User', text: '1' });
-    await handleIncomingMessage({ channel: 'messenger', externalId: PSID, displayName: 'Test User', text: '1' });
+    await send('hi');
+    await send('my landlord wants me out');
+    await send('he gave me 3 days');
 
     const { rows } = await mockDb.query('SELECT COUNT(*) FROM clients WHERE phone = $1', [PSID]);
     expect(parseInt(rows[0].count, 10)).toBe(1);
@@ -54,7 +50,7 @@ describe('Messenger conversation continuity (regression: PSID identity bug)', ()
 
   it('still keeps WhatsApp and Messenger clients independent by their own externalId', async () => {
     const waResult = await handleIncomingMessage({ channel: 'whatsapp', externalId: '94771234567', displayName: 'WA User', text: 'hi' });
-    const fbResult = await handleIncomingMessage({ channel: 'messenger', externalId: PSID, displayName: 'FB User', text: 'hi' });
+    const fbResult = await send('hi');
     expect(waResult.conversationId).not.toBe(fbResult.conversationId);
   });
 });

@@ -67,6 +67,9 @@ function createTestDb() {
   );
   db.public.none(scenarioAndSessionReset);
 
+  const adaptiveFlow = fs.readFileSync(path.join(migrationsDir, '005_adaptive_flow.sql'), 'utf-8');
+  db.public.none(adaptiveFlow);
+
   const { Pool } = db.adapters.createPg();
   return new Pool();
 }

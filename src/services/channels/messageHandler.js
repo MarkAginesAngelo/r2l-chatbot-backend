@@ -1,31 +1,8 @@
 const { v4: uuidv4 } = require('uuid');
 const db = require('../../config/db');
-const { retrieveRelevantChunks } = require('../rag/retrievalService');
-const { generateAnswer, detectLanguage, translateToEnglish, translateText } = require('../ai/openaiClient');
 const { getSetting } = require('../../controllers/settingsController');
 const { notifyStaff } = require('../../config/socket');
-const { handleTriageStage } = require('../triage/triageEngine');
-const { CATEGORIES } = require('../triage/categories');
-const { getQdrantFilterForCategory, getQdrantFilterForScenario } = require('../triage/categoryFilter');
-const { resolveQuickAction, getQuickActionReply } = require('../triage/quickActions');
-const { findScenarioByKey } = require('../triage/scenarios');
-const { buildReplyParts } = require('../triage/replyFormatter');
-const { detectCase, curatedContextChunk } = require('../triage/caseClassifier');
-const { composeAnswer } = require('../ai/answerPolicy');
-const { widenToAllDocuments } = require('../rag/generalFallback');
-
-
-const SYSTEM_PROMPT = `You are the official assistant for Right to Life Sri Lanka (R2L), an NGO.
-Answer only using the provided context from R2L's approved knowledge base.
-If the context does not contain enough information, say so honestly and offer to connect the user
-with a human R2L representative. Do not invent procedures, contact details, or legal advice.
-Be respectful, calm, and clear — many users may be in distress.`;
-
-const HANDOFF_MESSAGES = {
-  en: "I don't have enough approved information to answer that confidently. An R2L representative will follow up with you here shortly.",
-  si: 'මට එය විශ්වාසයෙන් පිළිතුරු දීමට ප්‍රමාණවත් අනුමත තොරතුරු නොමැත. R2L නියෝජිතයෙකු ඉක්මනින් ඔබ හා සම්බන්ධ වනු ඇත.',
-  ta: 'இதற்கு நம்பிக்கையுடன் பதிலளிக்க போதுமான அங்கீகரிக்கப்பட்ட தகவல் என்னிடம் இல்லை. R2L பிரதிநிதி விரைவில் உங்களைத் தொடர்பு கொள்வார்.',
-};
+const { processUserMessage } = require('../chat/conversationEngine');
 
 async function findOrCreateChannelConversation({ channel, externalId, displayName }) {
   const { rows: existingClient } = await db.query(
@@ -87,267 +64,28 @@ async function findOrCreateChannelConversation({ channel, externalId, displayNam
   return { client, conversation: newConvo[0] };
 }
 
-async function storeMessage(conversationId, senderType, content, language, chunkIds = []) {
+async function storeUserMessage(conversationId, content, language) {
   await db.query(
-    `INSERT INTO messages (id, conversation_id, sender_type, content, language, retrieved_chunk_ids)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [uuidv4(), conversationId, senderType, content, language, chunkIds]
+    `INSERT INTO messages (id, conversation_id, sender_type, content, language) VALUES ($1, $2, 'user', $3, $4)`,
+    [uuidv4(), conversationId, content, language]
   );
-}
-
-/** Same reasoning as chatController.js: recent turns give generateAnswer
- * real conversational memory and let retrieval find the right document for
- * a short, context-dependent follow-up. */
-async function getRecentMessages(conversationId, limit = 8) {
-  const { rows } = await db.query(
-    `SELECT sender_type, content FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT $2`,
-    [conversationId, limit]
-  );
-  return rows
-    .reverse()
-    .map((r) => ({ role: r.sender_type === 'user' ? 'user' : 'assistant', content: r.content }));
 }
 
 /**
  * Single entry point for WhatsApp/Messenger. `text` may be free text or a
- * WhatsApp interactive reply's id/title — the triage engine's token matching
- * handles both. Returns { reply, conversationId, needsHuman, stage, options }
- * so the webhook can decide whether to send plain text or an interactive
- * message back.
+ * button / quick-reply id ("yes" / "no" for the yes-no questions). Returns
+ * { reply, replyParts, conversationId, needsHuman, stage, language, options }
+ * so the webhook can decide whether to send plain text or buttons back. The
+ * conversation flow itself is shared with the website chat
+ * (services/chat/conversationEngine.js).
  */
 async function handleIncomingMessage({ channel, externalId, displayName, text }) {
   const { conversation } = await findOrCreateChannelConversation({ channel, externalId, displayName });
 
-  await storeMessage(conversation.id, 'user', text, conversation.language || null);
+  await storeUserMessage(conversation.id, text, conversation.language || null);
   notifyStaff('conversation:message', { conversationId: conversation.id, senderType: 'user', content: text });
 
-  const triageResult = await handleTriageStage(conversation, text);
-
-  if (triageResult && triageResult.fallThrough) {
-    // scenario is set directly (not COALESCE'd) — the triage engine always
-    // returns an explicit newScenario (a key, or null to clear it) at every
-    // stage transition, since "which scenario is active" is fully
-    // determined by the stage being entered, unlike category/language which
-    // may genuinely be unknown yet.
-    await db.query(
-      `UPDATE conversations SET stage = $1, category = COALESCE($2, category), scenario = $3, updated_at = now() WHERE id = $4`,
-      [triageResult.newStage, triageResult.newCategory || null, triageResult.newScenario || null, conversation.id]
-    );
-    conversation.stage = triageResult.newStage;
-    conversation.category = triageResult.newCategory || conversation.category;
-    conversation.scenario = triageResult.newScenario || null;
-  } else if (triageResult) {
-    const {
-      reply,
-      newStage,
-      newLanguage,
-      newCategory,
-      newScenario,
-      isEmergency,
-      options,
-      // Category/scenario menus carry the FULL sentence per option
-      // (menuStyle: 'list') rather than a short button label — it's up to
-      // each channel controller to decide how to lay that out (the website
-      // widget just renders every option; Messenger paginates it into a
-      // List Template — see messengerWebhookController.js).
-      menuStyle,
-    } = triageResult;
-    const language = newLanguage || conversation.language || 'en';
-
-    await db.query(
-      `UPDATE conversations SET stage = $1, language = COALESCE($2, language),
-         category = COALESCE($3, category), scenario = $4, updated_at = now() WHERE id = $5`,
-      [newStage, newLanguage || null, newCategory || null, newScenario || null, conversation.id]
-    );
-    conversation.scenario = newScenario || null;
-
-    await storeMessage(conversation.id, 'ai', reply, language);
-
-    if (isEmergency) {
-      await db.query(`UPDATE conversations SET status = 'needs_human' WHERE id = $1`, [conversation.id]);
-      await db.query(
-        `INSERT INTO human_handoffs (id, conversation_id, status, priority) VALUES ($1, $2, 'pending', 'emergency')`,
-        [uuidv4(), conversation.id]
-      );
-      notifyStaff('handoff:requested', {
-        conversationId: conversation.id,
-        channel,
-        language,
-        lastMessage: text,
-        requestedAt: new Date().toISOString(),
-        priority: 'emergency',
-      });
-    }
-
-    await db.query(
-      `INSERT INTO analytics_events (id, event_type, channel, language, conversation_id)
-       VALUES ($1, 'message_sent', $2, $3, $4)`,
-      [uuidv4(), channel, language, conversation.id]
-    );
-
-    return {
-      reply,
-      replyParts: buildReplyParts(reply, newStage),
-      conversationId: conversation.id,
-      needsHuman: Boolean(isEmergency),
-      stage: newStage,
-      language,
-      options,
-      menuStyle,
-    };
-  }
-
-  let category = CATEGORIES.find((c) => c.key === conversation.category);
-
-  // Same reasoning as chatController.js: check quick actions BEFORE language
-  // detection. A button/quick-reply tap sends back a short ASCII id (e.g.
-  // "legal_aid") with no language signal, so detecting from it would always
-  // yield "en" regardless of what the user actually selected. Use the
-  // conversation's already-established language instead.
-  const quickAction = conversation.category ? resolveQuickAction(conversation.category, text) : null;
-  if (quickAction) {
-    const language = conversation.language || 'en';
-    const qaReply = getQuickActionReply(quickAction, language);
-    const localizedReply = qaReply.translated ? qaReply.text : await translateText(qaReply.text, language);
-    await storeMessage(conversation.id, 'ai', localizedReply, language);
-    await db.query(
-      `INSERT INTO analytics_events (id, event_type, channel, language, conversation_id)
-       VALUES ($1, 'message_sent', $2, $3, $4)`,
-      [uuidv4(), channel, language, conversation.id]
-    );
-    return {
-      reply: localizedReply,
-      replyParts: buildReplyParts(localizedReply, 'in_chat'),
-      conversationId: conversation.id,
-      needsHuman: false,
-      stage: 'in_chat',
-    };
-  }
-
-  const language = await detectLanguage(text);
-
-  await db.query(`UPDATE conversations SET language = $1, updated_at = now() WHERE id = $2`, [
-    language,
-    conversation.id,
-  ]);
-
-  const topK = await getSetting('retrieval_top_k');
-  const threshold = await getSetting('low_confidence_threshold');
-  const retrievalQuery = await translateToEnglish(text, language);
-
-  const recentHistory = await getRecentMessages(conversation.id, 8);
-  const priorTurns = recentHistory.slice(0, -1);
-  const conversationalContext = priorTurns
-    .slice(-3)
-    .map((h) => h.content)
-    .join(' ');
-  const contextualRetrievalQuery = conversationalContext
-    ? `${conversationalContext} ${retrievalQuery}`
-    : retrievalQuery;
-
-  // Re-identify the case from this message and the chat so far. People often
-  // start on one topic and move to another (or raise a second problem) as
-  // the conversation goes on, so the scenario is re-checked on every free-text
-  // message and the answer is grounded in the scenario they are on NOW.
-  const detected = await detectCase({
-    message: text,
-    history: priorTurns,
-    currentCategory: conversation.category,
-    currentScenario: conversation.scenario,
-  });
-  if (detected?.changed) {
-    await db.query(`UPDATE conversations SET category = $1, scenario = $2, updated_at = now() WHERE id = $3`, [
-      detected.category,
-      detected.scenario,
-      conversation.id,
-    ]);
-    conversation.category = detected.category;
-    conversation.scenario = detected.scenario;
-    category = CATEGORIES.find((c) => c.key === detected.category);
-  }
-
-  // If a specific scenario is active (the user picked one from the menu),
-  // scope retrieval to just that scenario's document first — otherwise a
-  // follow-up question could surface a DIFFERENT scenario's contacts from
-  // the same category (e.g. giving a sextortion victim the wage-theft
-  // hotline just because both live under a broader category). If that
-  // narrow search comes back empty or low-confidence, widen to the whole
-  // category before giving up — the follow-up may genuinely be about
-  // something else, and staying wrongly scoped forever would be worse.
-  const activeScenario = findScenarioByKey(conversation.category, conversation.scenario);
-  const scenarioFilter = activeScenario ? await getQdrantFilterForScenario(activeScenario, language) : undefined;
-  const categoryFilter = category ? await getQdrantFilterForCategory(category, language) : undefined;
-  const filter = scenarioFilter || categoryFilter;
-
-  let chunks = await retrieveRelevantChunks(contextualRetrievalQuery, { limit: topK, filter });
-  let bestScore = chunks[0]?.score ?? 0;
-
-  if (scenarioFilter && categoryFilter && (chunks.length === 0 || bestScore < threshold)) {
-    const widerChunks = await retrieveRelevantChunks(contextualRetrievalQuery, { limit: topK, filter: categoryFilter });
-    const widerBestScore = widerChunks[0]?.score ?? 0;
-    if (widerBestScore > bestScore) {
-      chunks = widerChunks;
-      bestScore = widerBestScore;
-    }
-  }
-
-  // Still weak? Search every uploaded document (general reference material
-  // such as the Fundamental Rights chapter and the UDHR isn't tied to a scenario).
-  ({ chunks, bestScore } = await widenToAllDocuments({
-    query: contextualRetrievalQuery,
-    originalText: text,
-    language,
-    topK,
-    chunks,
-    bestScore,
-    threshold,
-  }));
-
-  // Sinhala/Tamil: add the approved curated text for the active scenario so
-  // the answer uses the reviewed wording, not just the English documents.
-  const curated = conversation.scenario ? curatedContextChunk(conversation.scenario, language) : null;
-  if (curated) {
-    chunks = [curated, ...chunks];
-    bestScore = Math.max(bestScore, curated.score);
-  }
-
-  // Hybrid mode (default): knowledge base first, the AI's own knowledge when
-  // the knowledge base has nothing relevant. `ai_mode = kb_only` restores the
-  // old behaviour of handing off whenever the knowledge base can't answer.
-  const { reply, needsHuman } = await composeAnswer({
-    text,
-    language,
-    chunks,
-    bestScore,
-    threshold,
-    history: priorTurns,
-    kbOnlyHandoff: HANDOFF_MESSAGES,
-  });
-
-  await storeMessage(conversation.id, 'ai', reply, language, chunks.map((c) => c.chunkId).filter(Boolean));
-
-  if (needsHuman) {
-    await db.query(`UPDATE conversations SET status = 'needs_human' WHERE id = $1`, [conversation.id]);
-    await db.query(
-      `INSERT INTO human_handoffs (id, conversation_id, status) VALUES ($1, $2, 'pending')`,
-      [uuidv4(), conversation.id]
-    );
-    notifyStaff('handoff:requested', {
-      conversationId: conversation.id,
-      channel,
-      language,
-      lastMessage: text,
-      requestedAt: new Date().toISOString(),
-    });
-  }
-
-  await db.query(
-    `INSERT INTO analytics_events (id, event_type, channel, language, conversation_id)
-     VALUES ($1, 'message_sent', $2, $3, $4)`,
-    [uuidv4(), channel, language, conversation.id]
-  );
-
-  return { reply, replyParts: buildReplyParts(reply, 'in_chat'), conversationId: conversation.id, needsHuman, stage: 'in_chat' };
+  return processUserMessage({ conversation, text, channel });
 }
 
 module.exports = { handleIncomingMessage, findOrCreateChannelConversation };

@@ -3,6 +3,7 @@ const multer = require('multer');
 const { authenticate, authorize } = require('../middlewares/auth');
 const {
   uploadDocument,
+  importFromUrl,
   listDocuments,
   deleteDocument,
 } = require('../controllers/documentController');
@@ -19,6 +20,7 @@ router.use(authenticate, authorize('super_admin', 'admin'));
 
 router.get('/', listDocuments);
 router.post('/', upload.single('file'), uploadDocument);
+router.post('/from-url', importFromUrl);
 router.delete('/:id', deleteDocument);
 
 module.exports = router;
