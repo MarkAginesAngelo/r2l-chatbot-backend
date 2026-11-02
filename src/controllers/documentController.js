@@ -5,6 +5,7 @@ const { AppError } = require('../middlewares/errorHandler');
 const { enqueueIngestion } = require('../config/queue');
 const { deletePointsByDocumentId } = require('../services/rag/qdrantClient');
 const logger = require('../config/logger');
+const { fetchForKnowledgeBase, UrlImportError } = require('../services/rag/urlImport');
 
 async function uploadDocument(req, res) {
   if (!req.file) throw new AppError('No file uploaded', 400);
@@ -26,9 +27,38 @@ async function uploadDocument(req, res) {
   res.status(202).json({ id, status: 'processing' });
 }
 
+/** Adds a web page / PDF / Word file to the knowledge base from a link. */
+async function importFromUrl(req, res) {
+  const { url, title, language = 'en' } = req.body || {};
+  if (!url || typeof url !== 'string') throw new AppError('url is required', 400);
+  if (!['en', 'si', 'ta'].includes(language)) throw new AppError('language must be en, si or ta', 400);
+
+  let fetched;
+  try {
+    fetched = await fetchForKnowledgeBase(url.trim());
+  } catch (err) {
+    if (err instanceof UrlImportError) throw new AppError(err.message, err.status);
+    throw err;
+  }
+
+  const id = uuidv4();
+  const docTitle = String(title || fetched.title).trim().slice(0, 250);
+  await db.query(
+    `INSERT INTO documents (id, title, file_path, file_type, language, status, uploaded_by, source_url)
+     VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7)`,
+    [id, docTitle, fetched.filePath, fetched.fileType, language, req.user?.id || null, fetched.finalUrl]
+  );
+
+  await enqueueIngestion(id).catch((err) => {
+    logger.error(`[documents] Failed to enqueue ingestion for ${id}: ${err.message}`, { stack: err.stack });
+  });
+
+  res.status(202).json({ id, status: 'processing', title: docTitle, fileType: fetched.fileType, characters: fetched.chars, preview: fetched.preview });
+}
+
 async function listDocuments(req, res) {
   const { rows } = await db.query(
-    `SELECT id, title, file_type, language, status, created_at FROM documents ORDER BY created_at DESC`
+    `SELECT id, title, file_type, language, status, source_url, created_at FROM documents ORDER BY created_at DESC`
   );
   res.json({ documents: rows });
 }
@@ -50,4 +80,4 @@ async function deleteDocument(req, res) {
   res.status(204).send();
 }
 
-module.exports = { uploadDocument, listDocuments, deleteDocument };
+module.exports = { uploadDocument, importFromUrl, listDocuments, deleteDocument };
