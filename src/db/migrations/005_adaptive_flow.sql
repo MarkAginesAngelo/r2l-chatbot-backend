@@ -22,14 +22,7 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_url TEXT;
 UPDATE conversations SET stage = 'in_chat' WHERE stage IN ('awaiting_language', 'awaiting_category', 'awaiting_scenario');
 
 -- Conversations that already asked for a human before this migration.
-UPDATE conversations c
-SET handoff_status = 'requested'
-WHERE c.status <> 'closed'
-AND EXISTS (
-    SELECT 1
-    FROM human_handoffs h
-    WHERE h.conversation_id = c.id
-    AND h.status IN ('pending', 'accepted')
-);
+UPDATE conversations SET handoff_status = 'requested'
+WHERE id IN (SELECT conversation_id FROM human_handoffs);
 
 CREATE INDEX IF NOT EXISTS idx_conversations_handoff_status ON conversations(handoff_status);

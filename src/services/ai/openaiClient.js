@@ -75,7 +75,7 @@ async function generateOpenAnswer({ systemPrompt, userMessage, contextChunks = [
   const completion = await client.chat.completions.create({
     model: env.openai.chatModel,
     messages,
-    temperature: 0.4,
+    temperature: 0.5,
   });
 
   return completion.choices[0].message.content;
